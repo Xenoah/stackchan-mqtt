@@ -106,14 +106,25 @@ cd stackchan-mqtt
 ポートを指定する場合は `--upload-port COM4` を付けます。認識されないときは
 microSD スロット付近の RST ボタンを約3秒長押ししてダウンロードモードに入れます。
 
-ビルドせずに書き込む場合は、[Releases](https://github.com/Xenoah/stackchan-mqtt/releases) の
-`stackchan-mqtt-<版>-full.bin`（ブートローダー・パーティション・アプリを結合したもの）を 0x0 に書き込みます。
+ビルドせずに書き込む場合は [Releases](https://github.com/Xenoah/stackchan-mqtt/releases) の
+バイナリを [esptool](https://github.com/espressif/esptool)（`pip install esptool`）で書き込みます。
+
+**新しく入れる（設定は初期化される）**: 結合イメージを 0x0 に書き込みます。
+Wi-Fi 設定・キャリブレーションを保存している NVS も消えるので、初回セットアップからになります。
 
 ```powershell
 python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.0.0-full.bin
 ```
 
-アプリ部分だけの `firmware.bin`（0x10000）も添付しています。内蔵ボイスは下の手順で別に書き込みます。
+**アップデート（設定を残す）**: 4つのファイルをそれぞれのアドレスに書き込みます。NVS（0x9000〜）には触れません。
+stackchan-codex や以前の版からの更新もこちらです。
+
+```powershell
+python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash `
+  0x0 bootloader.bin 0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin
+```
+
+内蔵ボイスは下の手順で別に書き込みます。
 
 ### 1.5. 内蔵ボイスを書き込む（単体で喋らせる）
 
