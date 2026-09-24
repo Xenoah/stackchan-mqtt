@@ -1141,20 +1141,26 @@ void updatePrinterMonitor(uint32_t now) {
 // 印刷中は本体 LED（左右6灯ずつ）で進捗を表示する。
 // 戻り値: LED を使った=true（ゲーミングRGB は描かない）
 bool updatePrinterLed(uint32_t now) {
-  if (!configPortal.config().ledProgress || !bambu.isEnabled()) {
-    return false;
-  }
+  static bool ledInUse = false;
   const PrinterState& s = printerNow;
-  if (s.link != LinkState::Online || !s.synced) {
-    return false;
-  }
   const bool recent = now - printerPhaseSince < kPhaseLedHoldMs;
   const bool failed =
       s.phase == PrintPhase::Failed && !isCancelError(s.printError) && recent;
   const bool finished = s.phase == PrintPhase::Finish && recent;
-  if (!s.isActive() && !failed && !finished) {
+  const bool wanted = configPortal.config().ledProgress && bambu.isEnabled() &&
+                      s.link == LinkState::Online && s.synced &&
+                      (s.isActive() || failed || finished);
+  if (!wanted) {
+    if (ledInUse) {
+      // 進捗表示をやめたら通常表示へ戻す（ゲーミングRGB OFF 時は緑=待機に戻す）
+      ledInUse = false;
+      if (!configPortal.config().gamingRgb) {
+        M5StackChan.showRgbColor(0, 48, 0);
+      }
+    }
     return false;
   }
+  ledInUse = true;
   if (static_cast<int32_t>(now - gamingLedHoldUntil) < 0) {
     return true;  // イベント色を保持中
   }
@@ -1491,13 +1497,19 @@ bool handleDisplayTouch() {
     }
     if (!touching && displayWasTouching) {
       const ModeMenuButton selected = modeMenuPressed;
+      if (selected == ModeMenuButton::Printer && bambu.isEnabled()) {
+        // 顔の描画を再開せずにメニューから詳細画面へ直接切り替える
+        // （再開直後の一時停止で描画タスクをフレーム途中で止めないため）
+        modeMenuOpen = false;
+        modeMenuPressed = ModeMenuButton::None;
+        printerScreenOpen = true;
+        drawPrinterScreenNow();
+        displayWasTouching = touching;
+        return true;
+      }
       closeModeMenu(); // メニューを閉じてからモードを切り替える
       if (selected == ModeMenuButton::Printer) {
-        if (bambu.isEnabled()) {
-          openPrinterScreen();
-        } else {
-          avatarFace.showStatus("PRINTER: SETUP ON WEB", 2500);
-        }
+        avatarFace.showStatus("PRINTER: SETUP ON WEB", 2500);
       } else if (selected == ModeMenuButton::Voice) {
         const bool voice = !configPortal.config().commentaryVoice;
         configPortal.setCommentaryVoice(voice);
