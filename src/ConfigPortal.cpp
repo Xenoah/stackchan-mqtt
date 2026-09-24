@@ -212,9 +212,14 @@ void ConfigPortal::load() {
   config_.gamingRgb = preferences_.getBool("gaming_rgb", config_.gamingRgb);
 
   config_.bambuEnabled = preferences_.getBool("bb_on", config_.bambuEnabled);
-  config_.bambuHost = preferences_.getString("bb_host", "");
-  config_.bambuSerial = preferences_.getString("bb_serial", "");
-  config_.bambuAccessCode = preferences_.getString("bb_code", "");
+  // 未保存のキーを getString すると Preferences がエラーログを出すので、存在を確かめてから読む
+  auto readString = [this](const char* key, const String& fallback) {
+    return preferences_.isKey(key) ? preferences_.getString(key, fallback)
+                                   : fallback;
+  };
+  config_.bambuHost = readString("bb_host", "");
+  config_.bambuSerial = readString("bb_serial", "");
+  config_.bambuAccessCode = readString("bb_code", "");
   config_.commentaryVoice =
       preferences_.getBool("cm_voice", config_.commentaryVoice);
   config_.commentaryStep =
@@ -231,7 +236,7 @@ void ConfigPortal::load() {
   config_.speakerVolume = preferences_.getUChar("volume", config_.speakerVolume);
   config_.printerHud = preferences_.getBool("hud", config_.printerHud);
   config_.ledProgress = preferences_.getBool("led_prog", config_.ledProgress);
-  config_.timezone = preferences_.getString("tz", config_.timezone);
+  config_.timezone = readString("tz", config_.timezone);
   preferences_.end();
 }
 
