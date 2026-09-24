@@ -4,6 +4,8 @@
 #include <Avatar.h>
 #include <faces/FaceTemplates.hpp>
 
+#include "FaceHud.h"
+
 // M5Stack-Avatarライブラリのラッパークラス。
 // 表情・顔型・カラーパレット・目パターン・変形パターンを管理し、
 // 自動まばたき・ショーケース自動巡回・ステータステキスト表示機能を提供する。
@@ -69,7 +71,14 @@ class AvatarFaceController {
   float gamingHue() const;
 
   // ステータステキストを表示する。durationMs=0で常時表示。
+  // HUD 表示中は吹き出しの代わりに HUD 下段へ短く表示する。
   void showStatus(const char* text, uint32_t durationMs = 1400);
+
+  // 顔に重ねるプリンタ HUD（全顔テンプレートの口パーツに差し込み済み）
+  FaceHud& hud();
+
+  // HUD の表示 ON/OFF。表示中は呼吸ズームを止めて HUD が揺れないようにする。
+  void setHudVisible(bool visible);
 
   // アバターの描画タスク（FreeRTOS）を一時停止する。
   // メニュー表示などで画面を直接描画する前に呼ぶ。
@@ -118,6 +127,7 @@ class AvatarFaceController {
   m5avatar::Face* faces_[kFaceCount] = {};      // 顔型オブジェクトの配列
   m5avatar::ColorPalette palettes_[kPaletteCount]; // カラーパレットの配列
   m5avatar::ColorPalette gamingPalette_;        // ゲーミングRGB用の動的パレット
+  FaceHud hud_;                                 // プリンタ HUD（口パーツ経由で描画）
 
   size_t expressionIndex_ = 5;        // 現在の表情インデックス（5=Neutral）
   size_t faceIndex_ = 0;              // 現在の顔型インデックス（0=Default）

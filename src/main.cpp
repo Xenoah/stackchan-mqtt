@@ -10,15 +10,22 @@
 //   - タッチスクリーンの下スワイプでモード・設定メニューを開く
 //   - 頭部タッチセンサで表情・パレット等を操作
 //   - WiFiでアクセス可能な設定Webサーバ（ポート80）
+//   - Bambu Lab プリンタ（P1S 等）の LAN MQTT 監視と、スタックチャンによる実況
+//   - 顔に重ねるプリンタ HUD、本体 LED の進捗表示、本体のプリンタ詳細画面
 
 #include <M5Unified.h>
 #include <esp_camera.h>
 #include <esp_system.h>
 #include <math.h>
+#include <time.h>
 
 #include "AvatarFaceController.h"
+#include "BambuMqttClient.h"
 #include "CalibrationController.h"
 #include "ConfigPortal.h"
+#include "PrintCommentator.h"
+#include "PrinterJson.h"
+#include "PrinterScreen.h"
 #include "VoiceVoxClient.h"
 #include "hardware_features.h"
 
@@ -27,6 +34,25 @@ AvatarFaceController avatarFace;          // アバター描画・アニメー�
 CalibrationController calibrationController; // サーボ・IMUキャリブレーション
 ConfigPortal configPortal;               // WiFi接続・設定Webサーバ
 TtsClient ttsClient;                     // TTS音声合成クライアント
+BambuMqttClient bambu;                   // Bambu Lab プリンタ LAN MQTT（専用タスク）
+PrintCommentator commentator;            // 印刷状況の実況エンジン
+
+// --- プリンタ監視・実況の状態 ---
+PrinterState printerNow;                 // 最新のプリンタ状態（メインループ用のコピー）
+uint32_t printerRevisionSeen = 0;        // 取り込み済みの状態リビジョン
+uint32_t printerEvaluatedAt = 0;         // 最後に実況判定した時刻
+PrintPhase printerLastPhase = PrintPhase::Unknown;
+uint32_t printerPhaseSince = 0;          // 現在の gcode_state になった時刻
+uint32_t commentBusyUntil = 0;           // この時刻までは次の実況を始めない
+String lastCommentText;                  // 最後の実況（本体詳細画面に表示）
+bool printerScreenOpen = false;          // 本体のプリンタ詳細画面を表示中か
+uint32_t printerScreenDrawnAt = 0;
+uint32_t printerScreenRevision = 0;
+constexpr uint32_t kCommentGapMs = 1500;                   // 実況と実況の間
+constexpr uint32_t kPhaseLedHoldMs = 5UL * 60UL * 1000UL;  // 完了/失敗の LED 表示時間
+
+void updatePrinterMonitor(uint32_t now);
+bool updatePrinterLed(uint32_t now);
 
 // 口パク同期の設定
 constexpr uint32_t LIP_FRAME_INTERVAL_MS = 30;  // 口パク更新間隔（30ms）
@@ -122,7 +148,7 @@ void updateCameraGaze() {
     return;
   }
   // 発話中・メニュー表示中は I2C/CPU 競合を避けて休む
-  if (speaking || modeMenuOpen || settingsInfoOpen) {
+  if (speaking || modeMenuOpen || settingsInfoOpen || printerScreenOpen) {
     return;
   }
   const uint32_t now = millis();
@@ -203,6 +229,8 @@ enum class AppMode {
 // 下スワイプメニューのボタン
 enum class ModeMenuButton {
   None,
+  Printer,   // プリンタ詳細画面を開く
+  Voice,     // 実況の声 ON/OFF
   LocalLlm,  // LOCAL LLMモードに切り替え
   LevelHold, // LEVEL HOLDモードに切り替え
   Settings,  // 設定画面を開く
@@ -278,6 +306,8 @@ M5Canvas& startupCanvas() {
   if (canvasWidth != width || canvasHeight != height) {
     canvas.deleteSprite();
     canvas.setColorDepth(16);
+    // 150KB のフルスクリーン canvas は PSRAM に置き、TLS 用の内部 RAM を空けておく
+    canvas.setPsram(true);
     canvas.createSprite(width, height);
     canvasWidth = width;
     canvasHeight = height;
@@ -505,13 +535,8 @@ void updateGamingLed(uint32_t now) {
   M5StackChan.showRgbColor(r, g, b);
 }
 
-void triggerPetHappyMotion() {
-  ignoreNextTopClick = true;
-  avatarFace.setExpression(m5avatar::Expression::Happy);
-  avatarFace.showStatus("HAPPY", 1000);
-  avatarFace.returnToDefaultAfter(BODY_JOY_DURATION_MS + 800);
-  showStatusLed(96, 24, 72);
-
+// 首を左右に振る喜びモーションを始める（サーボ校正済み・LOCAL LLM モード時のみ）
+void startJoyMotion() {
   if (!calibrationController.data().servoValid ||
       currentMode != AppMode::LocalLlm ||
       levelHoldActive) {
@@ -529,6 +554,15 @@ void triggerPetHappyMotion() {
   bodyMotionStartedAt = millis();
   bodyMotionLastUpdateAt = 0;
   bodyMotionState = BodyMotionState::Joy;
+}
+
+void triggerPetHappyMotion() {
+  ignoreNextTopClick = true;
+  avatarFace.setExpression(m5avatar::Expression::Happy);
+  avatarFace.showStatus("HAPPY", 1000);
+  avatarFace.returnToDefaultAfter(BODY_JOY_DURATION_MS + 800);
+  showStatusLed(96, 24, 72);
+  startJoyMotion();
 }
 
 void updateBodyMotion() {
@@ -818,7 +852,11 @@ void serviceApp() {
   avatarFace.update();     // アバターのステータス・まばたき・ショーケース更新
   updateLipSync();         // 口パクアニメーション更新
   updateActiveMode();      // LEVEL HOLDなどのモード固有処理
-  updateGamingLed(millis()); // ゲーミングRGB（本体LEDの虹色循環）
+  updatePrinterMonitor(millis()); // プリンタ状態の取り込み・実況判定・HUD 更新
+  // 本体LED: 印刷中は進捗表示、それ以外はゲーミングRGB（虹色循環）
+  if (!updatePrinterLed(millis())) {
+    updateGamingLed(millis());
+  }
 
   // 空きヒープの最小値を毎フレーム追跡する（断片化・リーク検出用）
   const uint32_t freeHeapNow = ESP.getFreeHeap();
@@ -856,6 +894,21 @@ void serviceApp() {
   }
 }
 
+// 設定中のTTSサーバでテキストを再生する（演出なしの共通処理・ブロッキング）。
+bool playTts(const String& text) {
+  const AppConfig& appConfig = configPortal.config();
+  TtsConfig ttsConfig;
+  ttsConfig.host = appConfig.ttsHost;
+  ttsConfig.port = appConfig.ttsPort;
+  ttsConfig.speaker = appConfig.ttsSpeaker;
+  ttsConfig.engineType =
+      ttsEngineTypeFromString(appConfig.ttsEngineType);
+
+  const bool success = ttsClient.speak(ttsConfig, text);
+  stopLipSync(); // 再生終了後に口を閉じる
+  return success;
+}
+
 // 指定テキストをTTSで読み上げる（共通処理）。
 // 話し中・WiFi未接続・ショーケース中の場合は早期リターンする。
 // simple_wav エンジンではこの text がそのまま Gateway の /synthesis に POST される。
@@ -876,17 +929,7 @@ void speakText(const String& text) {
   avatarFace.showStatus("TTS", 900);
   showStatusLed(0, 0, 96); // 青色LED: TTS通信中
 
-  // 設定値からTTSリクエストを構築する
-  const AppConfig& appConfig = configPortal.config();
-  TtsConfig ttsConfig;
-  ttsConfig.host = appConfig.ttsHost;
-  ttsConfig.port = appConfig.ttsPort;
-  ttsConfig.speaker = appConfig.ttsSpeaker;
-  ttsConfig.engineType =
-      ttsEngineTypeFromString(appConfig.ttsEngineType);
-
-  const bool success = ttsClient.speak(ttsConfig, text);
-  stopLipSync(); // 再生終了後に口を閉じる
+  const bool success = playTts(text);
 
   if (success) {
     avatarFace.resetToDefault();
@@ -905,6 +948,265 @@ void speakText(const String& text) {
 // 設定された「Text to speak」をTTSで読み上げる（Aボタン・頭タッチ用）。
 void speakConfiguredText() {
   speakText(configPortal.config().speechText);
+}
+
+// ---------------------------------------------------------------------------
+// プリンタ監視・実況
+// ---------------------------------------------------------------------------
+
+// 実況テキストを TTS に渡す形へ変換する。
+// simple_wav（Android Gateway）は本文をそのまま送ると current.wav を返す仕様なので、
+// "__SAY__" 接頭辞で「この文章を読み上げて」と伝える（Gateway 側で対応済み）。
+String ttsTextFor(const String& text) {
+  if (configPortal.config().ttsEngineType == "simple_wav") {
+    return "__SAY__" + text;
+  }
+  return text;
+}
+
+m5avatar::Expression expressionFor(CommentMood mood) {
+  switch (mood) {
+    case CommentMood::Happy:  return m5avatar::Expression::Happy;
+    case CommentMood::Sad:    return m5avatar::Expression::Sad;
+    case CommentMood::Doubt:  return m5avatar::Expression::Doubt;
+    case CommentMood::Angry:  return m5avatar::Expression::Angry;
+    case CommentMood::Sleepy: return m5avatar::Expression::Sleepy;
+    default:                  return m5avatar::Expression::Neutral;
+  }
+}
+
+// 実況の気分に合わせて LED を一瞬光らせる
+void showMoodLed(CommentMood mood) {
+  switch (mood) {
+    case CommentMood::Happy:  showStatusLed(0, 72, 24, 2500); break;
+    case CommentMood::Sad:    showStatusLed(0, 12, 72, 2500); break;
+    case CommentMood::Doubt:  showStatusLed(72, 44, 0, 2500); break;
+    case CommentMood::Angry:  showStatusLed(96, 0, 0, 3000); break;
+    case CommentMood::Sleepy: showStatusLed(24, 0, 48, 2500); break;
+    default:                  showStatusLed(0, 36, 56, 2500); break;
+  }
+}
+
+// 字幕だけ出すときの表示時間（文字数からおおよその読了時間を見積もる）
+uint32_t captionDurationMs(const String& text) {
+  const uint32_t chars = text.length() / 3;  // UTF-8 の日本語は1文字3バイト
+  return constrain(2500UL + chars * 180UL, 4000UL, 20000UL);
+}
+
+void drawPrinterScreenNow() {
+  auto& canvas = startupCanvas();
+  drawPrinterScreen(canvas, printerNow, lastCommentText,
+                    configPortal.config().commentaryVoice);
+  canvas.pushSprite(0, 0);
+  printerScreenDrawnAt = millis();
+  printerScreenRevision = printerRevisionSeen;
+}
+
+void openPrinterScreen() {
+  if (printerScreenOpen) return;
+  printerScreenOpen = true;
+  avatarFace.pauseDrawing();
+  delay(20);
+  drawPrinterScreenNow();
+}
+
+void closePrinterScreen() {
+  if (!printerScreenOpen) return;
+  printerScreenOpen = false;
+  avatarFace.resumeDrawing();
+}
+
+// 状態が変わったとき・1秒ごとに本体のプリンタ詳細画面を描き直す
+void refreshPrinterScreen() {
+  if (!printerScreenOpen) return;
+  if (printerRevisionSeen != printerScreenRevision ||
+      millis() - printerScreenDrawnAt >= 1000) {
+    drawPrinterScreenNow();
+  }
+}
+
+// 実況コメントを演出付きで再生する（字幕・表情・LED・声・喜びモーション）。
+// ブロッキング（TTS 再生中も serviceApp() が回り続ける）。
+void performComment(Comment comment) {
+  if (comment.text.isEmpty() || speaking) return;
+
+  comment.createdAt = millis();
+  commentator.remember(comment);
+  lastCommentText = comment.text;
+  Serial.printf("[commentary] %s\n", comment.text.c_str());
+
+  if (avatarFace.isShowcaseEnabled()) {
+    avatarFace.toggleShowcase();
+  }
+  avatarFace.setExpression(expressionFor(comment.mood));
+  showMoodLed(comment.mood);
+  if (printerScreenOpen) {
+    drawPrinterScreenNow();
+  }
+
+  FaceHud& hud = avatarFace.hud();
+  const bool voice =
+      configPortal.config().commentaryVoice && configPortal.isConnected();
+  uint32_t holdMs = captionDurationMs(comment.text);
+  if (voice) {
+    hud.setCaption(comment.text, 0);  // 喋り終わるまで出し続ける
+    speaking = true;
+    const bool ok = playTts(ttsTextFor(comment.spoken()));
+    speaking = false;
+    holdMs = 2500;
+    hud.setCaption(comment.text, holdMs);
+    if (!ok) {
+      avatarFace.showStatus("TTS ERROR", 2500);
+      showStatusLed(96, 0, 0, 3000);
+      Serial.printf("TTS error: %s\n", ttsClient.lastError().c_str());
+    }
+  } else {
+    hud.setCaption(comment.text, holdMs);
+  }
+
+  if (comment.celebrate) {
+    startJoyMotion();
+    showStatusLed(0, 96, 32, 6000);
+  }
+  avatarFace.returnToDefaultAfter(holdMs + 500);
+  commentBusyUntil = millis() + (voice ? kCommentGapMs : holdMs);
+}
+
+// 頭タップ: いまの状況をまとめて話す
+void reportPrinterStatus() {
+  performComment(commentator.statusReport(bambu.snapshot()));
+}
+
+// HUD の表示内容をプリンタ状態から作る
+void updatePrinterHud(const PrinterState& s) {
+  const bool visible = configPortal.config().printerHud && bambu.isEnabled();
+  avatarFace.setHudVisible(visible);
+  if (!visible) {
+    return;
+  }
+
+  HudData d;
+  d.visible = true;
+  const bool online = s.link == LinkState::Online && s.synced;
+  const char* phase = printPhaseLabelJa(s.phase);
+  if (!online) {
+    switch (s.link) {
+      case LinkState::Online:      phase = "取得中…"; break;
+      case LinkState::Error:       phase = "接続エラー"; break;
+      case LinkState::WaitingWifi: phase = "Wi-Fi待ち"; break;
+      default:                     phase = "接続中…"; break;
+    }
+  }
+  strlcpy(d.phase, phase, sizeof(d.phase));
+  if (online) {
+    d.active = s.isActive() || s.phase == PrintPhase::Finish;
+    d.alert = s.hmsCount > 0 || s.phase == PrintPhase::Pause ||
+              (s.phase == PrintPhase::Failed && !isCancelError(s.printError));
+    d.percent = s.phase == PrintPhase::Finish ? 100 : s.percent;
+    if (s.isActive() && s.remainingMin >= 0) {
+      strlcpy(d.remaining, remainingShort(s.remainingMin).c_str(),
+              sizeof(d.remaining));
+      strlcpy(d.eta, etaClockShort(s.remainingMin).c_str(), sizeof(d.eta));
+    }
+    strlcpy(d.job, s.jobName, sizeof(d.job));
+    d.layer = s.layer;
+    d.totalLayers = s.totalLayers;
+    if (!isnan(s.nozzleTemp)) d.nozzle = static_cast<int>(lroundf(s.nozzleTemp));
+    if (!isnan(s.bedTemp)) d.bed = static_cast<int>(lroundf(s.bedTemp));
+  }
+  avatarFace.hud().set(d);
+}
+
+// プリンタ状態を取り込み、実況判定と HUD 更新を行う（serviceApp から毎フレーム）。
+// 状態が変わったとき、または1秒ごと（時刻・接続断の判定用）にだけ処理する。
+void updatePrinterMonitor(uint32_t now) {
+  if (!bambu.isEnabled()) {
+    return;
+  }
+  const uint32_t revision = bambu.revision();
+  if (revision == printerRevisionSeen && now - printerEvaluatedAt < 1000) {
+    return;
+  }
+  printerRevisionSeen = revision;
+  printerEvaluatedAt = now;
+  printerNow = bambu.snapshot();
+  if (printerNow.phase != printerLastPhase) {
+    printerLastPhase = printerNow.phase;
+    printerPhaseSince = now;
+  }
+  commentator.update(printerNow, now);
+  updatePrinterHud(printerNow);
+}
+
+// 印刷中は本体 LED（左右6灯ずつ）で進捗を表示する。
+// 戻り値: LED を使った=true（ゲーミングRGB は描かない）
+bool updatePrinterLed(uint32_t now) {
+  if (!configPortal.config().ledProgress || !bambu.isEnabled()) {
+    return false;
+  }
+  const PrinterState& s = printerNow;
+  if (s.link != LinkState::Online || !s.synced) {
+    return false;
+  }
+  const bool recent = now - printerPhaseSince < kPhaseLedHoldMs;
+  const bool failed =
+      s.phase == PrintPhase::Failed && !isCancelError(s.printError) && recent;
+  const bool finished = s.phase == PrintPhase::Finish && recent;
+  if (!s.isActive() && !failed && !finished) {
+    return false;
+  }
+  if (static_cast<int32_t>(now - gamingLedHoldUntil) < 0) {
+    return true;  // イベント色を保持中
+  }
+  static uint32_t lastLedAt = 0;
+  if (now - lastLedAt < 50) {
+    return true;
+  }
+  lastLedAt = now;
+
+  const float wave = 0.5f + 0.5f * sinf(now * 0.004f);
+  if (failed) {
+    const bool on = (now / 400) % 2 == 0;
+    M5StackChan.showRgbColor(on ? 90 : 4, 0, 0);
+  } else if (finished) {
+    const uint8_t g = static_cast<uint8_t>(20 + 60 * wave);
+    M5StackChan.showRgbColor(g / 3, g, g / 2);
+  } else if (s.phase == PrintPhase::Pause) {
+    const bool on = (now / 600) % 2 == 0;
+    M5StackChan.showRgbColor(on ? 70 : 6, on ? 42 : 3, 0);
+  } else if (s.phase == PrintPhase::Running) {
+    // 左右それぞれ6灯で 0〜100% を表す。途中の1灯は明るさで端数を表し、ゆっくり脈打つ。
+    const float level = constrain(s.percent, 0, 100) / 100.0f * 6.0f;
+    for (int i = 0; i < 6; ++i) {
+      const float f = constrain(level - i, 0.0f, 1.0f);
+      uint8_t g = 3;
+      uint8_t b = 1;
+      if (f >= 1.0f) {
+        g = 64;
+        b = 12;
+      } else if (f > 0.0f) {
+        g = static_cast<uint8_t>(6 + 58 * f * (0.55f + 0.45f * wave));
+        b = g / 5;
+      }
+      M5StackChan.setRgbColor(i, 0, g, b);
+      M5StackChan.setRgbColor(6 + i, 0, g, b);
+    }
+    M5StackChan.refreshRgb();
+  } else {
+    // PREPARE / SLICING: 青くゆっくり呼吸
+    const uint8_t b = static_cast<uint8_t>(6 + 56 * wave);
+    M5StackChan.showRgbColor(0, b / 4, b);
+  }
+  return true;
+}
+
+// 頭タップ: プリンタ監視中は状況報告、そうでなければ設定テキストを話す
+void onHeadTap() {
+  if (bambu.isEnabled()) {
+    reportPrinterStatus();
+  } else {
+    speakConfiguredText();
+  }
 }
 
 // 頭部タッチセンサの入力を処理する。
@@ -931,7 +1233,7 @@ void handleTopTouch() {
     if (ignoreNextTopClick) {
       ignoreNextTopClick = false; // スワイプ後の誤クリックを無視
     } else {
-      speakConfiguredText(); // シングルクリック: TTS読み上げ
+      onHeadTap(); // シングルクリック: 状況報告 or TTS読み上げ
     }
   } else if (touch.wasDecideClickCount() &&
              touch.getClickCount() >= 3) {
@@ -945,77 +1247,124 @@ void handleTopTouch() {
   }
 }
 
-// タッチ座標からメニューボタンを判定する。
-// ボタン領域: rowX〜rowX+rowW の横幅内で、各ボタンのY座標範囲。
-ModeMenuButton modeMenuButtonAt(int16_t x, int16_t y) {
-  const int16_t width = M5.Display.width();
-  const int16_t rowX = 18;
-  const int16_t rowW = width - rowX * 2;
+// メニューのタイル配置（2列×3行）。描画と当たり判定で共有する。
+constexpr ModeMenuButton kMenuOrder[] = {
+    ModeMenuButton::Printer,  ModeMenuButton::Voice,
+    ModeMenuButton::LocalLlm, ModeMenuButton::LevelHold,
+    ModeMenuButton::Settings, ModeMenuButton::Close,
+};
+constexpr int16_t kMenuTop = 40;
+constexpr int16_t kMenuMargin = 10;
+constexpr int16_t kMenuGap = 8;
+constexpr int16_t kMenuTileH = 60;
 
-  if (x < rowX || x > rowX + rowW) {
-    return ModeMenuButton::None; // ボタン横幅の外側
-  }
-  if (y >= 48 && y <= 88) {
-    return ModeMenuButton::LocalLlm;
-  }
-  if (y >= 96 && y <= 136) {
-    return ModeMenuButton::LevelHold;
-  }
-  if (y >= 144 && y <= 184) {
-    return ModeMenuButton::Settings;
-  }
-  if (y >= 192 && y <= 232) {
-    return ModeMenuButton::Close;
+bool modeMenuTileRect(size_t index, int16_t& x, int16_t& y, int16_t& w,
+                      int16_t& h) {
+  if (index >= sizeof(kMenuOrder) / sizeof(kMenuOrder[0])) return false;
+  const int16_t width = M5.Display.width();
+  w = (width - kMenuMargin * 2 - kMenuGap) / 2;
+  h = kMenuTileH;
+  x = kMenuMargin + static_cast<int16_t>(index % 2) * (w + kMenuGap);
+  y = kMenuTop + static_cast<int16_t>(index / 2) * (h + kMenuGap);
+  return true;
+}
+
+// タッチ座標からメニューボタンを判定する
+ModeMenuButton modeMenuButtonAt(int16_t x, int16_t y) {
+  for (size_t i = 0; i < sizeof(kMenuOrder) / sizeof(kMenuOrder[0]); ++i) {
+    int16_t tx, ty, tw, th;
+    modeMenuTileRect(i, tx, ty, tw, th);
+    if (x >= tx && x < tx + tw && y >= ty && y < ty + th) {
+      return kMenuOrder[i];
+    }
   }
   return ModeMenuButton::None;
 }
 
-// モード選択メニューを描画する。
-// 4つのボタン（LOCAL LLM / LEVEL HOLD / SETTINGS / CLOSE）を表示する。
-// 選択中のモードは黄色ボーダーで強調、押下中のボタンは明るい色で表示する。
+// モード選択メニューを描画する（2列×3行のタイル）。
+// 選択中のモードは黄色の枠、押下中のタイルはアクセント色で塗る。
 void drawModeMenu(ModeMenuButton pressed) {
   auto& display = startupCanvas();
   const int16_t width = display.width();
-  constexpr int16_t rowX = 18;
-  const int16_t rowW = width - rowX * 2;
-  constexpr int16_t rowH = 40; // 4ボタンを収めるため46→40pxに縮小
+  const uint16_t bg = display.color565(14, 16, 20);
+  const uint16_t card = display.color565(30, 34, 43);
+  const uint16_t sub = display.color565(139, 146, 163);
 
-  display.fillScreen(TFT_BLACK);
-  display.setFont(&fonts::Font2);
-  display.setTextDatum(middle_center);
-  display.setTextSize(2);
-  display.setTextColor(TFT_WHITE, TFT_BLACK);
-  display.drawString("MODE", width / 2, 18);
-
+  display.fillScreen(bg);
   display.setTextSize(1);
-  display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  display.drawString(appModeName(currentMode), width / 2, 36); // 現在のモードを表示
+  display.setFont(&fonts::lgfxJapanGothicP_16);
+  display.setTextDatum(middle_left);
+  display.setTextColor(TFT_WHITE, bg);
+  display.drawString("メニュー", 12, 20);
+  display.setTextDatum(middle_right);
+  display.setTextColor(sub, bg);
+  display.drawString(appModeName(currentMode), width - 12, 20);
 
-  // 各ボタンを描画するラムダ
-  // 現在選択中のモードに対応するボタンは黄色ボーダーで強調する
-  auto drawRow = [&](ModeMenuButton button, const char* label,
-                     int16_t y, uint16_t color) {
+  const bool printerOn = bambu.isEnabled();
+  const bool voiceOn = configPortal.config().commentaryVoice;
+  for (size_t i = 0; i < sizeof(kMenuOrder) / sizeof(kMenuOrder[0]); ++i) {
+    const ModeMenuButton button = kMenuOrder[i];
+    int16_t x, y, w, h;
+    modeMenuTileRect(i, x, y, w, h);
+
+    const char* title = "";
+    String note;
+    uint16_t accent = sub;
+    switch (button) {
+      case ModeMenuButton::Printer:
+        title = "プリンター";
+        note = printerOn ? String(printPhaseLabelJa(printerNow.phase))
+                         : String("未設定");
+        accent = display.color565(74, 222, 128);
+        break;
+      case ModeMenuButton::Voice:
+        title = "実況の声";
+        note = voiceOn ? "ON" : "OFF（字幕のみ）";
+        accent = display.color565(96, 165, 250);
+        break;
+      case ModeMenuButton::LocalLlm:
+        title = "LOCAL LLM";
+        note = "通常モード";
+        accent = display.color565(52, 211, 153);
+        break;
+      case ModeMenuButton::LevelHold:
+        title = "LEVEL HOLD";
+        note = "水平を保つ";
+        accent = display.color565(56, 189, 248);
+        break;
+      case ModeMenuButton::Settings:
+        title = "設定";
+        note = "Web で開く";
+        accent = display.color565(192, 132, 252);
+        break;
+      default:
+        title = "閉じる";
+        note = "顔に戻る";
+        accent = display.color565(139, 146, 163);
+        break;
+    }
+
     const bool selected =
         (button == ModeMenuButton::LocalLlm &&
          currentMode == AppMode::LocalLlm) ||
         (button == ModeMenuButton::LevelHold &&
          currentMode == AppMode::LevelHold);
     const bool isPressed = pressed == button;
-    // 押下中: color（明るい色）、選択中: 0x2945（やや明るい暗色）、通常: 0x2104（暗色）
-    const uint16_t fill =
-        isPressed ? color : (selected ? 0x2945 : 0x2104);
-    display.fillRoundRect(rowX, y, rowW, rowH, 8, fill);
-    display.drawRoundRect(rowX, y, rowW, rowH, 8,
-                          selected ? TFT_YELLOW : TFT_DARKGREY);
-    display.setTextColor(TFT_WHITE, fill);
-    display.setTextSize(2);
-    display.drawString(label, width / 2, y + rowH / 2);
-  };
+    const uint16_t fill = isPressed ? accent : card;
+    const uint16_t textColor = isPressed ? bg : TFT_WHITE;
 
-  drawRow(ModeMenuButton::LocalLlm, "LOCAL LLM", 48, 0x03E0);   // 緑
-  drawRow(ModeMenuButton::LevelHold, "LEVEL HOLD", 96, 0x035F);  // 青
-  drawRow(ModeMenuButton::Settings, "SETTINGS", 144, 0x8010);    // 紫
-  drawRow(ModeMenuButton::Close, "CLOSE", 192, 0x4208);          // ダークグレー
+    display.fillRoundRect(x, y, w, h, 10, fill);
+    display.fillRoundRect(x, y + 10, 4, h - 20, 2, isPressed ? bg : accent);
+    if (selected) {
+      display.drawRoundRect(x, y, w, h, 10, TFT_YELLOW);
+      display.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 9, TFT_YELLOW);
+    }
+    display.setTextDatum(top_left);
+    display.setTextColor(textColor, fill);
+    display.drawString(title, x + 14, y + 10);
+    display.setTextColor(isPressed ? bg : sub, fill);
+    display.drawString(note, x + 14, y + 33);
+  }
   display.pushSprite(0, 0); // キャンバスを画面に転送（フリッカーフリー）
 }
 
@@ -1113,6 +1462,15 @@ bool handleDisplayTouch() {
   int16_t y = 0;
   const bool touching = M5.Display.getTouch(&x, &y);
 
+  // プリンタ詳細画面: タップで顔に戻る（実況や頭タッチは止めないので false を返す）
+  if (printerScreenOpen) {
+    if (!touching && displayWasTouching) {
+      closePrinterScreen();
+    }
+    displayWasTouching = touching;
+    return false;
+  }
+
   // SETTINGS情報画面が開いている: タッチリリースで閉じる
   if (settingsInfoOpen) {
     if (!touching && displayWasTouching) {
@@ -1134,7 +1492,18 @@ bool handleDisplayTouch() {
     if (!touching && displayWasTouching) {
       const ModeMenuButton selected = modeMenuPressed;
       closeModeMenu(); // メニューを閉じてからモードを切り替える
-      if (selected == ModeMenuButton::LocalLlm) {
+      if (selected == ModeMenuButton::Printer) {
+        if (bambu.isEnabled()) {
+          openPrinterScreen();
+        } else {
+          avatarFace.showStatus("PRINTER: SETUP ON WEB", 2500);
+        }
+      } else if (selected == ModeMenuButton::Voice) {
+        const bool voice = !configPortal.config().commentaryVoice;
+        configPortal.setCommentaryVoice(voice);
+        avatarFace.showStatus(voice ? "VOICE ON" : "VOICE OFF", 1800);
+        showStatusLed(voice ? 0 : 48, voice ? 64 : 24, voice ? 24 : 0);
+      } else if (selected == ModeMenuButton::LocalLlm) {
         activateMode(AppMode::LocalLlm);
       } else if (selected == ModeMenuButton::LevelHold) {
         activateMode(AppMode::LevelHold);
@@ -1179,6 +1548,15 @@ bool handleDisplayTouch() {
       displayWasTouching = false;
       return true;
     }
+
+    // 顔を軽くタップ: プリンタ詳細画面を開く（プリンタ監視中のみ）
+    if (bambu.isEnabled() && abs(verticalTravel) < 20 &&
+        horizontalTravel < 20 && duration <= 600 &&
+        displayTouchStartY < height - 44) {
+      openPrinterScreen();
+      displayWasTouching = false;
+      return false;
+    }
   }
 
   displayWasTouching = touching;
@@ -1220,7 +1598,7 @@ ServoPromptButton servoPromptButtonAt(int16_t x, int16_t y) {
 
 // 起動時サーボ選択ダイアログを描画する。
 // 赤いNOボタン（左）と緑のYESボタン（右）を表示する。
-void drawServoStartupPrompt(ServoPromptButton pressed) {
+void drawServoStartupPrompt(ServoPromptButton pressed, int secondsLeft = -1) {
   auto& display = startupCanvas();
   const int16_t width = display.width();
   constexpr int16_t kMargin = 14;
@@ -1250,7 +1628,11 @@ void drawServoStartupPrompt(ServoPromptButton pressed) {
   display.setTextColor(TFT_YELLOW, TFT_BLACK); // 警告は黄色で強調
   display.drawString("Clear the area before selecting YES", width / 2, 111);
   display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-  display.drawString("Touch a button to continue", width / 2, 137);
+  if (secondsLeft >= 0) {
+    display.drawString("Auto NO in " + String(secondsLeft) + "s", width / 2, 137);
+  } else {
+    display.drawString("Touch a button to continue", width / 2, 137);
+  }
 
   display.fillRoundRect(
       noX, kButtonTop, buttonWidth, kButtonHeight, 10, noColor);
@@ -1274,7 +1656,10 @@ void drawServoStartupPrompt(ServoPromptButton pressed) {
 ServoStartupChoice askServoStartupChoice() {
   avatarFace.pauseDrawing();
   delay(40);
-  drawServoStartupPrompt(ServoPromptButton::None);
+  // 停電復帰などの無人起動で止まらないよう、触れられなければ一定時間後に NO で進む
+  constexpr uint32_t kPromptTimeoutMs = 10000;
+  int secondsLeft = static_cast<int>(kPromptTimeoutMs / 1000);
+  drawServoStartupPrompt(ServoPromptButton::None, secondsLeft);
 
   int16_t touchX = 0;
   int16_t touchY = 0;
@@ -1286,14 +1671,31 @@ ServoStartupChoice askServoStartupChoice() {
   }
 
   bool wasTouching = false;
+  bool everTouched = false;
   ServoPromptButton pressed = ServoPromptButton::None;
+  const uint32_t promptStartedAt = millis();
 
   while (true) {
     M5StackChan.update();
+    if (!everTouched) {
+      const uint32_t elapsed = millis() - promptStartedAt;
+      if (elapsed >= kPromptTimeoutMs) {
+        avatarFace.resumeDrawing();
+        avatarFace.resetToDefault();
+        return ServoStartupChoice::KeepPosition;
+      }
+      const int left =
+          static_cast<int>((kPromptTimeoutMs - elapsed + 999) / 1000);
+      if (left != secondsLeft) {
+        secondsLeft = left;
+        drawServoStartupPrompt(pressed, secondsLeft);
+      }
+    }
     const bool touching = M5.Display.getTouch(&touchX, &touchY);
     const ServoPromptButton current =
         touching ? servoPromptButtonAt(touchX, touchY)
                  : ServoPromptButton::None;
+    everTouched |= touching;
 
     // ボタンが変わったら再描画してハイライト更新
     if (touching && current != pressed) {
@@ -1411,11 +1813,59 @@ void setup() {
     return speaking || pendingApiSpeak;
   });
 
+  // プリンタ ダッシュボード（Web）用 API。
+  // ハンドラは TTS 再生中にも呼ばれるため、喋る処理は実況の待ち行列に積むだけにする。
+  PrinterWebApi printerApi;
+  printerApi.stateJson = []() {
+    return printerStateJson(bambu.snapshot(), commentator, bambu.isEnabled(),
+                            configPortal.config().commentaryVoice);
+  };
+  printerApi.report = []() {
+    Comment c = commentator.statusReport(bambu.snapshot());
+    c.priority = CommentPriority::High;
+    commentator.enqueue(c);
+  };
+  printerApi.refresh = []() { bambu.requestPushAll(); };
+  printerApi.light = [](bool on) { bambu.requestChamberLight(on); };
+  printerApi.say = [](const String& text) -> bool {
+    Comment c;
+    c.text = text;
+    c.mood = CommentMood::Happy;
+    c.priority = CommentPriority::High;
+    commentator.enqueue(c);
+    return true;
+  };
+  printerApi.voice = [](bool on) { configPortal.setCommentaryVoice(on); };
+  configPortal.setPrinterApi(printerApi);
+
   Serial.println("Starting network configuration...");
   const bool wifiConnected = configPortal.begin();
 
   // ゲーミングRGB（顔の虹色循環）を設定値に従って有効化する
   avatarFace.setGamingRgb(configPortal.config().gamingRgb);
+
+  // --- プリンタ監視と実況 ---
+  const AppConfig& appConfig = configPortal.config();
+  CommentarySettings commentary;
+  commentary.progressStep = appConfig.commentaryStep;
+  commentary.periodicMin = appConfig.commentaryPeriodMin;
+  commentary.stages = appConfig.commentaryStages;
+  commentary.temps = appConfig.commentaryTemps;
+  commentator.configure(commentary);
+
+  BambuConfig bambuConfig;
+  bambuConfig.enabled = appConfig.bambuEnabled && wifiConnected;
+  bambuConfig.host = appConfig.bambuHost;
+  bambuConfig.serial = appConfig.bambuSerial;
+  bambuConfig.accessCode = appConfig.bambuAccessCode;
+  bambu.begin(bambuConfig);  // 専用タスクで接続・再接続し続ける
+  updatePrinterHud(bambu.snapshot());
+
+  if (wifiConnected) {
+    // 完成予定時刻の表示用に時刻を合わせる（バックグラウンドで同期）
+    configTzTime(appConfig.timezone.c_str(), "ntp.nict.jp", "time.google.com",
+                 "pool.ntp.org");
+  }
 
   if (!wifiConnected) {
     // WiFi接続失敗: セットアップAPモードで起動
@@ -1437,7 +1887,7 @@ void setup() {
                 configPortal.config().ttsSpeaker.c_str());
 
   avatarFace.resetToDefault();
-  avatarFace.showStatus("LOCAL LLM");
+  avatarFace.showStatus(bambu.isEnabled() ? "PRINTER MONITOR" : "LOCAL LLM");
   showStatusLed(0, 48, 0); // 緑色LED: 正常動作中
   startBodyMotion();
   Serial.println("Mode default: LOCAL LLM");
@@ -1460,6 +1910,9 @@ void loop() {
     return;
   }
 
+  // 本体のプリンタ詳細画面を開いていれば描き直す
+  refreshPrinterScreen();
+
   // Gateway からの /api/speak 発話待ちを処理する（ブラウザ送信→自動発話）。
   // WebServer ハンドラ内ではフラグを立てるだけで、実際の再生はここで行う。
   if (pendingApiSpeak && !speaking) {
@@ -1470,6 +1923,16 @@ void loop() {
       text = "__CURRENT__"; // 既定: Gateway の current.wav を再生する
     }
     speakText(text);
+    delay(5);
+    return;
+  }
+
+  // プリンタ実況: 待ち行列のコメントを順番に演出付きで喋る。
+  // High（完了・エラー等）は字幕だけの表示待ちを飛ばしてすぐ出す。
+  if (!speaking && commentator.hasComment() &&
+      (static_cast<int32_t>(millis() - commentBusyUntil) >= 0 ||
+       commentator.peekPriority() == CommentPriority::High)) {
+    performComment(commentator.popComment());
     delay(5);
     return;
   }

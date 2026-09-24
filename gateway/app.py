@@ -22,6 +22,7 @@ import secrets
 import shutil
 import socket
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -44,6 +45,11 @@ LOGS_DIR = BASE_DIR / "logs"
 SETTINGS_PATH = BASE_DIR / "settings.json"
 CURRENT_JSON = BASE_DIR / "current.json"
 CURRENT_WAV = BASE_DIR / "current.wav"
+SAY_WAV = BASE_DIR / "say.wav"
+
+# StackChan のプリンタ実況: /synthesis 本文がこの接頭辞で始まれば、続く文章をそのまま読み上げる
+SAY_PREFIX = "__SAY__"
+_say_lock = threading.Lock()
 
 LLM_URL = "http://127.0.0.1:8080/v1/chat/completions"
 LLM_HEALTH_URL = "http://127.0.0.1:8080/health"
@@ -337,6 +343,29 @@ def synth_wav(
         text,
     ]
     subprocess.run(cmd, check=True, capture_output=True)
+
+
+def synth_say_wav(text: str, settings: Dict[str, Any]) -> Optional[Path]:
+    """実況テキストを現在の音声設定で WAV にする（LLM は使わない）。失敗時は None。"""
+    text = text.strip()
+    if not text:
+        return None
+    lang = speech_lang_for(text, settings.get("voice_lang", "ja"))
+    speech_text = make_speech_text(text, lang, bool(settings.get("kanji_to_kana", True)))
+    with _say_lock:
+        try:
+            synth_wav(
+                speech_text,
+                lang,
+                clamp(settings.get("pitch"), 0, 99, 80),
+                clamp(settings.get("volume"), 0, 200, 200),
+                clamp(settings.get("speed"), 80, 260, 150),
+                SAY_WAV,
+                settings.get("tts_voice", "default"),
+            )
+        except Exception:
+            return None
+    return SAY_WAV
 
 
 def ensure_default_wav() -> Path:
@@ -859,11 +888,18 @@ async def synthesis(request: Request) -> Response:
     """StackChan(simple_wav) が叩くエンドポイント。常に audio/wav を返す。
 
     - 本文 "__REASK_LAST__": 最後の質問を再LLM処理して新WAVを返す
+    - 本文 "__SAY__<文章>": 文章をそのまま読み上げた WAV を返す（プリンタ実況用）
     - 本文 "__CURRENT__" / その他: current.wav を返す
     - current.wav が無ければデフォルトWAVを返す
     """
     body = (await request.body()).decode("utf-8", errors="ignore").strip()
     settings = load_settings()
+
+    if body.startswith(SAY_PREFIX):
+        wav = synth_say_wav(body[len(SAY_PREFIX):], settings)
+        if wav is not None:
+            return FileResponse(wav, media_type="audio/wav")
+        return FileResponse(ensure_default_wav(), media_type="audio/wav")
 
     if body == "__REASK_LAST__":
         current = load_current()

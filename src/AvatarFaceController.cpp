@@ -157,7 +157,8 @@ void AvatarFaceController::update() {
 
   // 呼吸に合わせた軽いズーム（Normal変形時のみ）。
   // 顔全体がゆっくり拡大縮小して、より生き生きと大げさに見せる。
-  if (!showcaseEnabled_ &&
+  // HUD 表示中は HUD ごと拡大縮小されて読みにくくなるため止める。
+  if (!showcaseEnabled_ && !hud_.isVisible() &&
       transformPatternIndex_ ==
           static_cast<size_t>(TransformPattern::Normal)) {
     const float pulse = 1.0f + 0.06f * sinf(now * 0.0026f); // ~2.4秒周期で±6%
@@ -287,8 +288,32 @@ void AvatarFaceController::updateGamingPalette(uint32_t now) {
 // durationMs=0 の場合は明示的に消去するまで表示し続ける。
 void AvatarFaceController::showStatus(const char* text,
                                       uint32_t durationMs) {
+  if (hud_.isVisible()) {
+    // 吹き出しは HUD 下段と重なるので、HUD のトースト表示へ回す
+    avatar_.setSpeechText("");
+    hud_.setToast(text, durationMs);
+    statusClearAt_ = 0;
+    return;
+  }
   avatar_.setSpeechText(text);
   statusClearAt_ = durationMs == 0 ? 0 : millis() + durationMs;
+}
+
+FaceHud& AvatarFaceController::hud() {
+  return hud_;
+}
+
+void AvatarFaceController::setHudVisible(bool visible) {
+  if (hud_.isVisible() == visible) {
+    return;
+  }
+  HudData data;
+  data.visible = visible;
+  hud_.set(data);
+  if (visible) {
+    avatar_.setSpeechText("");
+    applyTransform();  // 呼吸ズームで変わったスケールを戻す
+  }
 }
 
 // アバターのFreeRTOS描画タスクを一時停止する。
@@ -321,6 +346,7 @@ void AvatarFaceController::resetToDefault() {
   transformPatternIndex_ = 0; // Normal
 
   avatar_.setSpeechText("");
+  hud_.setToast("", 0);
   avatar_.setMouthOpenRatio(0.0f);
   applyFace();
   applyPalette();
@@ -386,6 +412,11 @@ void AvatarFaceController::initializeFaces() {
   faces_[4] = new m5avatar::GirlyFace2();   // 女の子風2（まつ毛付き）
   faces_[5] = new m5avatar::PinkDemonFace(); // ピンクの悪魔風
   faces_[6] = new m5avatar::DoggyFace();    // 犬風
+
+  // 全顔テンプレートの口を HUD 付きの口で包む（口を描いた直後に HUD を重ねる）
+  for (m5avatar::Face* face : faces_) {
+    face->setMouth(new HudMouth(face->getMouth(), &hud_));
+  }
 }
 
 // 5種類のカラーパレットを設定する。

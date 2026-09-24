@@ -26,6 +26,34 @@ struct AppConfig {
   // ゲーミングRGB演出。ONにすると顔（画面）と本体LEDが虹色にゆっくり循環する。
   // OFFにすると通常の2トーン表示＋ステータス色LEDに戻る。
   bool gamingRgb = true;
+
+  // --- Bambu Lab プリンタ監視（LAN MQTT）---
+  bool bambuEnabled = false;
+  String bambuHost;         // プリンタの IP アドレス
+  String bambuSerial;       // シリアル番号
+  String bambuAccessCode;   // LAN アクセスコード（画面には再表示しない）
+
+  // --- 実況 ---
+  bool commentaryVoice = true;       // 実況を喋る（OFF = 字幕と表情だけ）
+  uint8_t commentaryStep = 10;       // 進捗実況の間隔（%、0 = しない）
+  uint16_t commentaryPeriodMin = 15; // 無言が続いたときの定期報告（分、0 = しない）
+  bool commentaryStages = true;      // 準備工程（レベリング・加熱など）を実況
+  bool commentaryTemps = true;       // 目標温度到達を実況
+
+  // --- 表示 ---
+  bool printerHud = true;            // 顔の上にプリンタ HUD を重ねる
+  bool ledProgress = true;           // 印刷中は本体 LED で進捗を表示
+  String timezone = "JST-9";         // POSIX TZ（完成予定時刻の表示用）
+};
+
+// Web ダッシュボードからプリンタ機能を呼ぶためのフック（main.cpp が登録）
+struct PrinterWebApi {
+  std::function<String()> stateJson;          // GET  /api/printer
+  std::function<void()> report;               // POST /api/printer/report
+  std::function<void()> refresh;              // POST /api/printer/refresh
+  std::function<void(bool)> light;            // POST /api/printer/light
+  std::function<bool(const String&)> say;     // POST /api/printer/say
+  std::function<void(bool)> voice;            // POST /api/printer/voice
 };
 
 // /statusページに表示するアプリ実行時の状態。
@@ -52,9 +80,11 @@ struct RuntimeStatus {
 //   - 接続失敗 → APモード（StackChan-Setup-XXXXXX）でWebサーバ起動
 //
 // ページ:
-//   GET /       設定フォーム（現在値を事前入力、パスワードは伏せる）
-//   POST /save  設定を保存して再起動
-//   GET /status システム状態の確認ページ（5秒自動更新）
+//   GET /         プリンタ ダッシュボード（セットアップAP中は設定フォーム）
+//   GET /settings 設定フォーム（現在値を事前入力、パスワード類は伏せる）
+//   POST /save    設定を保存して再起動
+//   GET /status   システム状態の確認ページ（5秒自動更新）
+//   GET /app.css  共通スタイルシート
 class ConfigPortal {
  public:
   // NVSから設定を読み込み、WiFi接続またはAPを起動する。
@@ -103,6 +133,12 @@ class ConfigPortal {
   // GET /api/status の speaking フィールド用に、現在の発話状態を返すプローブを登録する。
   void setSpeakingProbe(std::function<bool()> probe);
 
+  // プリンタ ダッシュボード用 API のフックを登録する
+  void setPrinterApi(const PrinterWebApi& api);
+
+  // 実況の音声 ON/OFF を変更して NVS に保存する（再起動不要）
+  void setCommentaryVoice(bool enabled);
+
  private:
   Preferences preferences_;          // ESP32 NVS（不揮発ストレージ）アクセス
   WebServer server_{80};             // ポート80のHTTPサーバ
@@ -115,6 +151,7 @@ class ConfigPortal {
   // Gateway 連携用コールバック
   std::function<bool(const String&)> speakRequestFn_; // POST /api/speak 受付
   std::function<bool()> speakingProbe_;               // GET /api/status の speaking
+  PrinterWebApi printerApi_;                          // /api/printer/*
 
   // NVSから設定を読み込む
   void load();
@@ -142,6 +179,9 @@ class ConfigPortal {
 
   // Local LLM Chat カード（Gateway /ask をブラウザから直接叩くフロントエンド）を生成する
   String chatHtml();
+
+  // 共通の <head> とヘッダー（ナビゲーション）を生成する
+  String pageHead(const char* title, const char* active, bool autoRefresh = false);
 
   // WiFiスキャン結果を<option>タグのリストとして返す
   String wifiOptionsHtml();

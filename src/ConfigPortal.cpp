@@ -1,8 +1,10 @@
 #include "ConfigPortal.h"
 
+#include "WebPages.h"
+
 namespace {
 
-// HTMLの特殊文字（<>&"）をエンティティにエスケープする。
+// HTMLの特殊文字（<>&"'）をエンティティにエスケープする。
 // ユーザ入力をHTMLに埋め込む際のXSS対策として使用する。
 String htmlEscape(const String& value) {
   String escaped;
@@ -20,6 +22,9 @@ String htmlEscape(const String& value) {
         break;
       case '"':
         escaped += F("&quot;");
+        break;
+      case '\'':
+        escaped += F("&#39;");
         break;
       default:
         escaped += value[i];
@@ -47,6 +52,7 @@ String jsonEscape(const String& value) {
       case '\n': out += F("\\n"); break;
       case '\r': out += F("\\r"); break;
       case '\t': out += F("\\t"); break;
+      case '<':  out += F("\\u003c"); break;  // </script> 対策
       default:   out += c; break;
     }
   }
@@ -61,41 +67,34 @@ String selectedAttribute(const String& value, const char* option) {
   return "";
 }
 
-// 共通のHTMLヘッダ（スタイル・ナビゲーション付き）を生成する
-String commonHead(const char* title) {
-  String h;
-  h += F("<!doctype html><html lang='en'><head>"
-         "<meta charset='utf-8'><meta name='viewport' "
-         "content='width=device-width,initial-scale=1'>"
-         "<title>");
-  h += title;
-  h += F("</title><style>"
-         "body{font-family:sans-serif;max-width:640px;margin:24px auto;"
-         "padding:0 16px;background:#111;color:#eee}"
-         "h1{margin-bottom:4px}nav{margin-bottom:20px}"
-         "nav a{color:#8fd3ff;margin-right:16px;text-decoration:none}"
-         "nav a:hover{text-decoration:underline}"
-         "label{display:block;margin-top:14px}"
-         "input,select,textarea{box-sizing:border-box;width:100%;padding:10px;"
-         "margin-top:5px;border-radius:8px;border:1px solid #555;"
-         "background:#222;color:#fff}"
-         ".card{background:#1a1a1a;border-radius:12px;padding:16px;margin:14px 0}"
-         ".card h3{margin:0 0 10px}"
-         "table{width:100%;border-collapse:collapse}"
-         "td{padding:6px 2px;vertical-align:top}"
-         "td:first-child{color:#888;width:42%;white-space:nowrap}"
-         ".ok{color:#76d275}.warn{color:#ffd27f}.err{color:#ff6b6b}"
-         ".hint{font-size:0.85em;color:#888;margin-top:3px}"
-         "button{margin-top:20px;padding:12px 20px;border:0;border-radius:9px;"
-         "background:#76d275;color:#111;font-weight:bold;cursor:pointer}"
-         "</style></head><body>");
+// チェックボックス（label.check 形式）を生成する
+String checkbox(const char* name, bool checked, const char* label) {
+  String h = F("<label class='check'><input type='checkbox' value='1' name='");
+  h += name;
+  h += '\'';
+  if (checked) h += F(" checked");
+  h += '>';
+  h += label;
+  h += F("</label>");
   return h;
 }
 
-// 共通ナビゲーションバーを生成する
-String commonNav() {
-  return F("<nav><a href='/'>&#9881; Settings</a>"
-           "<a href='/status'>&#10003; Status</a></nav>");
+// 数値の <option> 群を生成する（values と labels は同数）
+String numberOptions(int current, const int* values, const char* const* labels,
+                     size_t count) {
+  String h;
+  for (size_t i = 0; i < count; ++i) {
+    h += "<option value='" + String(values[i]) + "'";
+    if (values[i] == current) h += F(" selected");
+    h += ">";
+    h += labels[i];
+    h += F("</option>");
+  }
+  return h;
+}
+
+bool isTruthy(const String& value) {
+  return value == "1" || value == "true" || value == "on" || value == "yes";
 }
 
 }  // namespace
@@ -154,6 +153,18 @@ void ConfigPortal::setSpeakingProbe(std::function<bool()> probe) {
   speakingProbe_ = probe;
 }
 
+void ConfigPortal::setPrinterApi(const PrinterWebApi& api) {
+  printerApi_ = api;
+}
+
+void ConfigPortal::setCommentaryVoice(bool enabled) {
+  if (config_.commentaryVoice == enabled) return;
+  config_.commentaryVoice = enabled;
+  preferences_.begin("stackchan", false);
+  preferences_.putBool("cm_voice", enabled);
+  preferences_.end();
+}
+
 // SETTINGSメニューを開いたときに呼ぶ。
 // 既存のWiFi接続（STA）を切断せず、AP_STAモードで追加APを起動する。
 void ConfigPortal::startSettingsAp() {
@@ -199,6 +210,24 @@ void ConfigPortal::load() {
       preferences_.getString("speech", config_.speechText);
   config_.cameraGaze = preferences_.getBool("cam_gaze", config_.cameraGaze);
   config_.gamingRgb = preferences_.getBool("gaming_rgb", config_.gamingRgb);
+
+  config_.bambuEnabled = preferences_.getBool("bb_on", config_.bambuEnabled);
+  config_.bambuHost = preferences_.getString("bb_host", "");
+  config_.bambuSerial = preferences_.getString("bb_serial", "");
+  config_.bambuAccessCode = preferences_.getString("bb_code", "");
+  config_.commentaryVoice =
+      preferences_.getBool("cm_voice", config_.commentaryVoice);
+  config_.commentaryStep =
+      preferences_.getUChar("cm_step", config_.commentaryStep);
+  config_.commentaryPeriodMin =
+      preferences_.getUShort("cm_period", config_.commentaryPeriodMin);
+  config_.commentaryStages =
+      preferences_.getBool("cm_stages", config_.commentaryStages);
+  config_.commentaryTemps =
+      preferences_.getBool("cm_temps", config_.commentaryTemps);
+  config_.printerHud = preferences_.getBool("hud", config_.printerHud);
+  config_.ledProgress = preferences_.getBool("led_prog", config_.ledProgress);
+  config_.timezone = preferences_.getString("tz", config_.timezone);
   preferences_.end();
 }
 
@@ -214,6 +243,19 @@ void ConfigPortal::save() {
   preferences_.putString("speech", config_.speechText);
   preferences_.putBool("cam_gaze", config_.cameraGaze);
   preferences_.putBool("gaming_rgb", config_.gamingRgb);
+
+  preferences_.putBool("bb_on", config_.bambuEnabled);
+  preferences_.putString("bb_host", config_.bambuHost);
+  preferences_.putString("bb_serial", config_.bambuSerial);
+  preferences_.putString("bb_code", config_.bambuAccessCode);
+  preferences_.putBool("cm_voice", config_.commentaryVoice);
+  preferences_.putUChar("cm_step", config_.commentaryStep);
+  preferences_.putUShort("cm_period", config_.commentaryPeriodMin);
+  preferences_.putBool("cm_stages", config_.commentaryStages);
+  preferences_.putBool("cm_temps", config_.commentaryTemps);
+  preferences_.putBool("hud", config_.printerHud);
+  preferences_.putBool("led_prog", config_.ledProgress);
+  preferences_.putString("tz", config_.timezone);
   preferences_.end();
 }
 
@@ -252,9 +294,24 @@ void ConfigPortal::startPortal() {
 
 // WebサーバのURLルートを登録する
 void ConfigPortal::registerRoutes() {
-  // GET / → 設定ページ（現在値を事前入力済み）
+  // GET / → プリンタ ダッシュボード（セットアップAP中は設定ページ）
   server_.on("/", HTTP_GET, [this]() {
+    if (portalActive_) {
+      server_.send(200, "text/html; charset=utf-8", pageHtml());
+      return;
+    }
+    server_.send_P(200, "text/html; charset=utf-8", kDashboardHtml);
+  });
+
+  // GET /settings → 設定ページ（現在値を事前入力済み）
+  server_.on("/settings", HTTP_GET, [this]() {
     server_.send(200, "text/html; charset=utf-8", pageHtml());
+  });
+
+  // GET /app.css → 共通スタイル（ブラウザにキャッシュさせる）
+  server_.on("/app.css", HTTP_GET, [this]() {
+    server_.sendHeader("Cache-Control", "max-age=86400");
+    server_.send_P(200, "text/css; charset=utf-8", kAppCss);
   });
 
   // POST /save → 設定を保存して再起動
@@ -270,6 +327,7 @@ void ConfigPortal::registerRoutes() {
     }
 
     config_.ttsHost = server_.arg("tts_host");
+    config_.ttsHost.trim();
     config_.ttsPort =
         constrain(server_.arg("tts_port").toInt(), 1, 65535);
     config_.ttsSpeaker = server_.arg("speaker");
@@ -283,10 +341,37 @@ void ConfigPortal::registerRoutes() {
     // チェックボックスは未チェック時にPOSTされないため、存在で判定する
     config_.cameraGaze = server_.hasArg("camera_gaze");
     config_.gamingRgb = server_.hasArg("gaming_rgb");
+
+    // プリンタ
+    config_.bambuEnabled = server_.hasArg("bambu_enabled");
+    config_.bambuHost = server_.arg("bambu_host");
+    config_.bambuHost.trim();
+    config_.bambuSerial = server_.arg("bambu_serial");
+    config_.bambuSerial.trim();
+    config_.bambuSerial.toUpperCase();
+    String code = server_.arg("bambu_code");
+    code.trim();
+    if (!code.isEmpty()) {
+      config_.bambuAccessCode = code;
+    }
+
+    // 実況・表示
+    config_.commentaryVoice = server_.hasArg("cm_voice");
+    config_.commentaryStep =
+        constrain(server_.arg("cm_step").toInt(), 0, 50);
+    config_.commentaryPeriodMin =
+        constrain(server_.arg("cm_period").toInt(), 0, 240);
+    config_.commentaryStages = server_.hasArg("cm_stages");
+    config_.commentaryTemps = server_.hasArg("cm_temps");
+    config_.printerHud = server_.hasArg("hud");
+    config_.ledProgress = server_.hasArg("led_progress");
+    String tz = server_.arg("tz");
+    tz.trim();
+    config_.timezone = tz.isEmpty() ? String("JST-9") : tz;
     save();
 
     server_.send(200, "text/html; charset=utf-8",
-                 pageHtml("Saved. Restarting StackChan..."));
+                 pageHtml("保存しました。StackChan を再起動しています…"));
     delay(800);
     ESP.restart();
   });
@@ -319,111 +404,226 @@ void ConfigPortal::registerRoutes() {
   server_.on("/api/status", HTTP_GET, [this]() {
     server_.send(200, "application/json", apiStatusJson());
   });
+
+  // --- プリンタ ダッシュボード API ---
+  server_.on("/api/printer", HTTP_GET, [this]() {
+    server_.sendHeader("Cache-Control", "no-store");
+    if (printerApi_.stateJson) {
+      server_.send(200, "application/json", printerApi_.stateJson());
+    } else {
+      server_.send(200, "application/json",
+                   "{\"enabled\":false,\"link\":\"disabled\"}");
+    }
+  });
+
+  auto ok = [this]() {
+    server_.send(200, "application/json", "{\"ok\":true}");
+  };
+
+  server_.on("/api/printer/report", HTTP_POST, [this, ok]() {
+    if (printerApi_.report) printerApi_.report();
+    ok();
+  });
+
+  server_.on("/api/printer/refresh", HTTP_POST, [this, ok]() {
+    if (printerApi_.refresh) printerApi_.refresh();
+    ok();
+  });
+
+  server_.on("/api/printer/light", HTTP_POST, [this, ok]() {
+    if (printerApi_.light) printerApi_.light(isTruthy(server_.arg("on")));
+    ok();
+  });
+
+  server_.on("/api/printer/voice", HTTP_POST, [this, ok]() {
+    if (printerApi_.voice) printerApi_.voice(isTruthy(server_.arg("on")));
+    ok();
+  });
+
+  server_.on("/api/printer/say", HTTP_POST, [this]() {
+    String text = server_.arg("text");
+    text.trim();
+    if (text.length() > 360) text = text.substring(0, 360);
+    const bool accepted =
+        !text.isEmpty() && printerApi_.say && printerApi_.say(text);
+    server_.send(200, "application/json",
+                 accepted ? "{\"ok\":true}" : "{\"ok\":false}");
+  });
+
+  server_.onNotFound([this]() {
+    server_.send(404, "text/plain; charset=utf-8", "Not found");
+  });
+}
+
+String ConfigPortal::pageHead(const char* title, const char* active,
+                              bool autoRefresh) {
+  String h;
+  h.reserve(900);
+  h += F("<!doctype html><html lang='ja'><head><meta charset='utf-8'>"
+         "<meta name='viewport' content='width=device-width,initial-scale=1'>");
+  if (autoRefresh) {
+    h += F("<meta http-equiv='refresh' content='5'>");
+  }
+  h += F("<title>");
+  h += title;
+  h += F("</title><link rel='stylesheet' href='/app.css'></head><body>"
+         "<header><div class='bar'><span class='brand'>StackChan × Bambu</span>"
+         "<nav>");
+  struct Item {
+    const char* key;
+    const char* href;
+    const char* label;
+  };
+  static const Item kItems[] = {
+      {"printer", "/", "プリンター"},
+      {"settings", "/settings", "設定"},
+      {"status", "/status", "状態"},
+  };
+  for (const Item& item : kItems) {
+    // セットアップAP中はダッシュボードが無いので「プリンター」を出さない
+    if (portalActive_ && strcmp(item.key, "printer") == 0) continue;
+    h += F("<a href='");
+    h += item.href;
+    h += '\'';
+    if (strcmp(item.key, active) == 0) h += F(" class='on'");
+    h += '>';
+    h += item.label;
+    h += F("</a>");
+  }
+  h += F("</nav></div></header><main>");
+  return h;
 }
 
 // 設定WebページのHTMLを生成する。
 // 現在保存されている値をフォームに事前入力する。
-// パスワードは値を表示せず、設定済みかどうかのみを示す。
+// パスワード・アクセスコードは値を表示せず、設定済みかどうかのみを示す。
 String ConfigPortal::pageHtml(const String& message) {
   String html;
-  html.reserve(5500);
-  html += commonHead("StackChan Setup");
-  html += F("<h1>StackChan Setup</h1>");
-  html += commonNav();
+  html.reserve(14000);
+  html += pageHead("StackChan 設定", "settings");
+  html += F("<h1>設定</h1>");
 
   if (!message.isEmpty()) {
-    html += "<p><strong>" + htmlEscape(message) + "</strong></p>";
+    html += "<div class='card ok'><strong>" + htmlEscape(message) +
+            "</strong></div>";
+  }
+  if (portalActive_) {
+    html += F("<div class='card warn'>セットアップモードです。Wi-Fi を設定して"
+              "保存すると再起動し、家の Wi-Fi に接続します。</div>");
   }
 
   html += F("<form method='post' action='/save'>");
 
-  // --- Wi-Fi SSID ---
-  html += F("<label>Wi-Fi SSID"
-            "<select name='ssid' style='box-sizing:border-box;width:100%;"
-            "padding:10px;margin-top:5px;border-radius:8px;border:1px solid #555;"
-            "background:#222;color:#fff'>");
-  html += wifiOptionsHtml();
-  html += F("</select></label>"
-            "<p><a href='/' style='color:#8fd3ff'>Rescan nearby Wi-Fi</a></p>"
-            "<label>Enter SSID manually (for hidden networks)"
-            "<input name='manual_ssid' placeholder='Takes priority when filled'>"
-            "</label>");
-
-  // --- Wi-Fi パスワード（値は表示しない、設定済み状態のみ示す）---
-  html += F("<label>Wi-Fi Password");
-  if (!config_.wifiPassword.isEmpty()) {
-    html += F("<span class='hint'> &mdash; currently set, leave blank to keep</span>");
+  // --- プリンタ ---
+  html += F("<section class='card' id='printer'><h3>🖨 Bambu Lab プリンター</h3>");
+  html += checkbox("bambu_enabled", config_.bambuEnabled,
+                   "プリンターを監視して実況する");
+  html += F("<div class='grid2'><label>IP アドレス<input name='bambu_host' "
+            "inputmode='decimal' placeholder='192.168.1.50' value='");
+  html += htmlEscape(config_.bambuHost);
+  html += F("'></label><label>シリアル番号<input name='bambu_serial' "
+            "autocapitalize='characters' placeholder='01P00A123456789' value='");
+  html += htmlEscape(config_.bambuSerial);
+  html += F("'></label></div><label>アクセスコード");
+  if (!config_.bambuAccessCode.isEmpty()) {
+    html += F("<span class='hint'> — 設定済み（変更するときだけ入力）</span>");
   } else {
-    html += F("<span class='hint'> &mdash; not set</span>");
+    html += F("<span class='hint'> — 未設定</span>");
   }
-  html += F("<input type='password' name='password' "
-            "placeholder='Enter to change'></label>");
+  html += F("<input type='password' name='bambu_code' autocomplete='off' "
+            "placeholder='8桁のアクセスコード'></label>"
+            "<p class='hint'>プリンター本体の「設定 → WLAN」で IP アドレスと"
+            "アクセスコード、「設定 → デバイス」でシリアル番号を確認できます。"
+            "つながらないときは値を再確認し、ファームウェアによっては"
+            "「LANのみモード」と「開発者モード」を有効にしてください。</p></section>");
 
-  // --- TTS エンジン種別 ---
-  html += F("<label>TTS Engine Type"
-            "<select name='tts_engine' style='box-sizing:border-box;width:100%;"
-            "padding:10px;margin-top:5px;border-radius:8px;border:1px solid #555;"
-            "background:#222;color:#fff'>");
+  // --- 実況 ---
+  html += F("<section class='card'><h3>🗣 実況</h3>");
+  html += checkbox("cm_voice", config_.commentaryVoice,
+                   "実況を声で喋る（OFF でも字幕と表情は出ます）");
+  {
+    static const int kStepValues[] = {0, 5, 10, 20, 25};
+    static const char* const kStepLabels[] = {"しない", "5% ごと", "10% ごと",
+                                              "20% ごと", "25% ごと"};
+    static const int kPeriodValues[] = {0, 5, 10, 15, 30, 60};
+    static const char* const kPeriodLabels[] = {
+        "しない", "5 分", "10 分", "15 分", "30 分", "60 分"};
+    html += F("<div class='grid2'><label>進捗の実況<select name='cm_step'>");
+    html += numberOptions(config_.commentaryStep, kStepValues, kStepLabels, 5);
+    html += F("</select></label><label>無言が続いたら状況報告<select name='cm_period'>");
+    html += numberOptions(config_.commentaryPeriodMin, kPeriodValues,
+                          kPeriodLabels, 6);
+    html += F("</select></label></div>");
+  }
+  html += checkbox("cm_stages", config_.commentaryStages,
+                   "準備工程（レベリング・加熱・ノズル清掃など）を実況");
+  html += checkbox("cm_temps", config_.commentaryTemps,
+                   "ノズル・ベッドが目標温度になったら実況");
+  html += F("<p class='hint'>開始・一時停止・完了・失敗・HMS エラーは常に実況します。"
+            "頭をタップすると今の状況を話します。</p></section>");
+
+  // --- 表示 ---
+  html += F("<section class='card'><h3>🖥 表示</h3>");
+  html += checkbox("hud", config_.printerHud,
+                   "顔の上にプリンター HUD（進捗・温度・字幕）を表示");
+  html += checkbox("led_progress", config_.ledProgress,
+                   "印刷中は本体 LED で進捗を表示");
+  html += checkbox("gaming_rgb", config_.gamingRgb,
+                   "Gaming RGB（顔と LED を虹色に循環）");
+  html += checkbox("camera_gaze", config_.cameraGaze,
+                   "カメラ目線（明るい方を見る）");
+  html += F("<p class='hint'>CoreS3 ではカメラとタッチ画面が内部 I2C を共有します。"
+            "タッチが効かなくなったらカメラ目線を OFF にしてください。</p>"
+            "<label>タイムゾーン（POSIX TZ）<input name='tz' value='");
+  html += htmlEscape(config_.timezone);
+  html += F("' placeholder='JST-9'></label><p class='hint'>完成予定時刻の表示に"
+            "使います。日本は JST-9。</p></section>");
+
+  // --- Wi-Fi ---
+  html += F("<section class='card'><h3>📶 Wi-Fi</h3><label>SSID<select name='ssid'>");
+  html += wifiOptionsHtml();
+  html += F("</select></label><p class='hint'><a href='/settings'>周辺の Wi-Fi を"
+            "再スキャン</a></p><label>SSID を手入力（非公開ネットワーク用）"
+            "<input name='manual_ssid' placeholder='入力するとこちらを優先'></label>"
+            "<label>パスワード");
+  if (!config_.wifiPassword.isEmpty()) {
+    html += F("<span class='hint'> — 設定済み（変更するときだけ入力）</span>");
+  } else {
+    html += F("<span class='hint'> — 未設定</span>");
+  }
+  html += F("<input type='password' name='password' placeholder='変更するときだけ入力'>"
+            "</label></section>");
+
+  // --- TTS ---
+  html += F("<section class='card'><h3>🔊 音声合成（TTS）</h3>"
+            "<label>エンジン<select name='tts_engine'>");
   html += "<option value='voicevox_compatible'" +
           selectedAttribute(config_.ttsEngineType, "voicevox_compatible") +
-          ">voicevox_compatible</option>";
+          ">VOICEVOX 互換（VOICEVOX / AivisSpeech）</option>";
   html += "<option value='simple_wav'" +
           selectedAttribute(config_.ttsEngineType, "simple_wav") +
-          ">simple_wav</option>";
-  html += F("</select></label>");
+          ">simple_wav（Android Gateway）</option>";
+  html += F("</select></label><div class='grid2'><label>ホスト<input name='tts_host' value='");
+  html += htmlEscape(config_.ttsHost);
+  html += F("'></label><label>ポート<input type='number' name='tts_port' "
+            "min='1' max='65535' value='");
+  html += String(config_.ttsPort);
+  html += F("'></label></div><label>話者 / スタイル ID（ずんだもん ノーマル = 3）"
+            "<input name='speaker' value='");
+  html += htmlEscape(config_.ttsSpeaker);
+  html += F("'></label><label>A ボタンで話す文章"
+            "<textarea name='speech' rows='3'>");
+  html += htmlEscape(config_.speechText);
+  html += F("</textarea></label><p class='hint'>プリンター監視中は、頭タップで"
+            "プリンターの状況を話します（A ボタンはこの文章）。</p></section>");
 
-  // --- TTS ホスト・ポート・話者（すべて現在値を事前入力）---
-  html += F("<label>TTS Host");
-  html += "<input name='tts_host' value='" + htmlEscape(config_.ttsHost) + "'>";
-  html += F("</label><label>TTS Port");
-  html += "<input type='number' name='tts_port' min='1' max='65535' value='" +
-          String(config_.ttsPort) + "'>";
-  html += F("</label><label>Speaker / Style ID (Zundamon Normal: 3)");
-  html += "<input name='speaker' value='" + htmlEscape(config_.ttsSpeaker) + "'>";
-  html += F("</label>");
-
-  // --- Aボタンで話すテキスト（現在値を事前入力）---
-  html += F("<label>Text to speak (A button)");
-  html += "<textarea name='speech' rows='4'>" +
-          htmlEscape(config_.speechText) + "</textarea>";
-  html += F("</label>");
-
-  // --- カメラ目線（明るい方向へ目を向ける）---
-  html += F("<label style='margin-top:16px'>"
-            "<input type='checkbox' name='camera_gaze' value='1' "
-            "style='width:auto;margin-right:8px'");
-  if (config_.cameraGaze) {
-    html += F(" checked");
-  }
-  html += F(">Camera gaze (look toward bright light)</label>"
-           "<p class='hint'>Uses the front camera. On CoreS3 the camera shares "
-           "the internal I2C bus with the touch screen; if touch becomes "
-           "unresponsive, turn this OFF and save.</p>");
-
-  // --- ゲーミングRGB（顔と本体LEDを虹色に循環）---
-  html += F("<label style='margin-top:16px'>"
-            "<input type='checkbox' name='gaming_rgb' value='1' "
-            "style='width:auto;margin-right:8px'");
-  if (config_.gamingRgb) {
-    html += F(" checked");
-  }
-  html += F(">Gaming RGB (rainbow face &amp; LED)</label>"
-           "<p class='hint'>Cycles the avatar face and the body LED through "
-           "rainbow colors. Turn OFF for the normal two-tone face and "
-           "status-colored LED.</p>");
-
-  html += F("<button type='submit'>Save &amp; Restart</button></form>"
-            "<p style='color:#555;font-size:0.85em;margin-top:20px'>"
-            "Configure your TTS server to accept HTTP connections "
-            "from the same LAN.</p>");
+  html += F("<div class='save'><button type='submit'>保存して再起動</button></div>"
+            "</form>");
 
   // --- Local LLM Chat（Android Gateway の /ask をブラウザから直接叩く）---
-  // ESP32 は中継しない。fetch で http://<tts_host>:<tts_port>/ask に POST し、
-  // 返ってきた JSON（question/answer/stackchan）を画面に表示する。
-  // 発話自体は Gateway が StackChan の /api/speak を呼ぶことで行われる。
   html += chatHtml();
 
-  html += F("</body></html>");
+  html += F("</main></body></html>");
   return html;
 }
 
@@ -433,17 +633,15 @@ String ConfigPortal::chatHtml() {
   String html;
   html.reserve(2200);
 
-  html += F("<div class='card'><h3>Local LLM Chat</h3>"
+  html += F("<section class='card'><h3>💬 Local LLM Chat（Android Gateway）</h3>"
             "<textarea id='chatText' rows='3'>");
   html += htmlEscape(F("自己紹介して"));
   html += F("</textarea>"
-           "<button type='button' id='chatSend' "
-           "onclick='askLlm()'>LLM&#12391;&#22238;&#31572;&#12375;&#12390;&#21796;&#12427;</button>"
-           "<p id='chatStatus' class='hint'></p>"
-           "<pre id='chatAnswer' style='white-space:pre-wrap;word-break:break-word;"
-           "background:#222;color:#fff;border-radius:8px;padding:10px;"
-           "margin-top:10px;display:none'></pre>"
-           "</div>");
+            "<p><button type='button' id='chatSend' class='ghost' "
+            "onclick='askLlm()'>LLMで回答して喋る</button></p>"
+            "<p id='chatStatus' class='hint'></p>"
+            "<pre id='chatAnswer' style='display:none'></pre>"
+            "</section>");
 
   // Gateway のベースURL（保存済みの TTS Host/Port）を JS に埋め込む
   html += F("<script>var GW_HOST=\"");
@@ -488,110 +686,94 @@ String ConfigPortal::chatHtml() {
 // 5秒ごとに自動更新する。
 String ConfigPortal::statusHtml() {
   String html;
-  html.reserve(4000);
-
-  // 5秒ごとに自動更新（<meta refresh>）
-  html += F("<!doctype html><html lang='en'><head>"
-            "<meta charset='utf-8'><meta name='viewport' "
-            "content='width=device-width,initial-scale=1'>"
-            "<meta http-equiv='refresh' content='5'>"
-            "<title>StackChan Status</title>");
-
-  // commonHead のスタイルを直接埋め込む（<meta refresh>と競合しないよう分離）
-  html += F("<style>"
-            "body{font-family:sans-serif;max-width:640px;margin:24px auto;"
-            "padding:0 16px;background:#111;color:#eee}"
-            "h1{margin-bottom:4px}nav{margin-bottom:20px}"
-            "nav a{color:#8fd3ff;margin-right:16px;text-decoration:none}"
-            "nav a:hover{text-decoration:underline}"
-            ".card{background:#1a1a1a;border-radius:12px;padding:16px;margin:14px 0}"
-            ".card h3{margin:0 0 10px}"
-            "table{width:100%;border-collapse:collapse}"
-            "td{padding:6px 2px;vertical-align:top}"
-            "td:first-child{color:#888;width:42%;white-space:nowrap}"
-            ".ok{color:#76d275}.warn{color:#ffd27f}.err{color:#ff6b6b}"
-            ".sub{color:#555;font-size:0.85em}"
-            "</style></head><body>");
-
-  html += F("<h1>StackChan Status</h1>");
-  html += commonNav();
+  html.reserve(5000);
+  html += pageHead("StackChan 状態", "status", true);
+  html += F("<h1>状態</h1>");
 
   // --- Wi-Fi 状態 ---
-  html += F("<div class='card'><h3>Wi-Fi</h3><table>");
+  html += F("<section class='card'><h3>📶 Wi-Fi</h3><table>");
   if (isConnected()) {
     const int32_t rssi = WiFi.RSSI();
     const char* strength =
-        rssi >= -55 ? "strong" : (rssi >= -70 ? "medium" : "weak");
-    html += F("<tr><td>Status</td><td class='ok'>Connected</td></tr>");
+        rssi >= -55 ? "強" : (rssi >= -70 ? "中" : "弱");
+    html += F("<tr><td>状態</td><td class='ok'>接続中</td></tr>");
     html += "<tr><td>SSID</td><td>" + htmlEscape(WiFi.SSID()) + "</td></tr>";
-    html += "<tr><td>IP Address</td><td>" +
+    html += "<tr><td>IP アドレス</td><td>" +
             WiFi.localIP().toString() + "</td></tr>";
-    html += "<tr><td>Signal</td><td>" + String(rssi) + " dBm (" +
-            String(strength) + ")</td></tr>";
-    html += "<tr><td>Gateway</td><td>" +
+    html += "<tr><td>電波</td><td>" + String(rssi) + " dBm（" +
+            String(strength) + "）</td></tr>";
+    html += "<tr><td>ゲートウェイ</td><td>" +
             WiFi.gatewayIP().toString() + "</td></tr>";
   } else if (portalActive_) {
-    html += F("<tr><td>Status</td><td class='warn'>Setup AP (not connected)</td></tr>");
-    html += "<tr><td>AP Name</td><td>" + htmlEscape(accessPointName_) + "</td></tr>";
+    html += F("<tr><td>状態</td><td class='warn'>セットアップ AP（未接続）</td></tr>");
+    html += "<tr><td>AP 名</td><td>" + htmlEscape(accessPointName_) + "</td></tr>";
     html += "<tr><td>AP IP</td><td>" + WiFi.softAPIP().toString() + "</td></tr>";
-    html += F("<tr><td>Password</td><td>stackchan</td></tr>");
+    html += F("<tr><td>パスワード</td><td>stackchan</td></tr>");
   } else {
-    html += F("<tr><td>Status</td><td class='err'>Not connected</td></tr>");
+    html += F("<tr><td>状態</td><td class='err'>未接続</td></tr>");
     if (!config_.wifiSsid.isEmpty()) {
-      html += "<tr><td>Saved SSID</td><td>" +
+      html += "<tr><td>保存済み SSID</td><td>" +
               htmlEscape(config_.wifiSsid) + "</td></tr>";
     }
   }
 
   // Settings AP が起動中ならその情報も表示する
   if (settingsApActive_) {
-    html += "<tr><td>Settings AP</td><td class='ok'>" +
-            htmlEscape(accessPointName_) + "<br><span class='sub'>" +
+    html += "<tr><td>設定用 AP</td><td class='ok'>" +
+            htmlEscape(accessPointName_) + "<br><span class='hint'>" +
             WiFi.softAPIP().toString() + " / pass: stackchan</span></td></tr>";
   }
-  html += F("</table></div>");
+  html += F("</table></section>");
+
+  // --- プリンタ ---
+  html += F("<section class='card'><h3>🖨 プリンター</h3><table>");
+  html += String("<tr><td>監視</td><td class='") +
+          (config_.bambuEnabled ? "ok'>ON" : "warn'>OFF") + "</td></tr>";
+  html += "<tr><td>IP アドレス</td><td>" +
+          htmlEscape(config_.bambuHost.isEmpty() ? String("-")
+                                                 : config_.bambuHost) +
+          "</td></tr>";
+  html += "<tr><td>シリアル</td><td>" +
+          htmlEscape(config_.bambuSerial.isEmpty() ? String("-")
+                                                   : config_.bambuSerial) +
+          "</td></tr>";
+  html += String("<tr><td>実況の声</td><td class='") +
+          (config_.commentaryVoice ? "ok'>ON" : "warn'>OFF") + "</td></tr>";
+  html += F("</table></section>");
 
   // --- TTS サーバ設定 ---
-  html += F("<div class='card'><h3>TTS Server</h3><table>");
-  html += "<tr><td>Engine</td><td>" +
+  html += F("<section class='card'><h3>🔊 TTS サーバー</h3><table>");
+  html += "<tr><td>エンジン</td><td>" +
           htmlEscape(config_.ttsEngineType) + "</td></tr>";
-  html += "<tr><td>Host</td><td>" + htmlEscape(config_.ttsHost) + "</td></tr>";
-  html += "<tr><td>Port</td><td>" + String(config_.ttsPort) + "</td></tr>";
-  html += "<tr><td>Speaker ID</td><td>" +
+  html += "<tr><td>ホスト</td><td>" + htmlEscape(config_.ttsHost) + "</td></tr>";
+  html += "<tr><td>ポート</td><td>" + String(config_.ttsPort) + "</td></tr>";
+  html += "<tr><td>話者 ID</td><td>" +
           htmlEscape(config_.ttsSpeaker) + "</td></tr>";
-
-  // TTS URL を表示（同一LAN接続時のみクリック可能）
-  if (isConnected()) {
-    const String ttsUrl = "http://" + config_.ttsHost + ":" +
-                          String(config_.ttsPort) + "/";
-    html += "<tr><td>URL</td><td><a href='" + htmlEscape(ttsUrl) +
-            "' style='color:#8fd3ff'>" + htmlEscape(ttsUrl) + "</a></td></tr>";
-  }
-  html += F("</table></div>");
+  html += F("</table></section>");
 
   // --- アプリ状態 ---
-  html += F("<div class='card'><h3>App</h3><table>");
-  html += "<tr><td>Mode</td><td>" +
+  html += F("<section class='card'><h3>🤖 アプリ</h3><table>");
+  html += "<tr><td>モード</td><td>" +
           htmlEscape(runtimeStatus_.appMode) + "</td></tr>";
-  html += String("<tr><td>Servo Cal</td><td class='") +
-          (runtimeStatus_.servoCalibrated ? "ok'>OK" : "warn'>Not calibrated") +
+  html += String("<tr><td>サーボ校正</td><td class='") +
+          (runtimeStatus_.servoCalibrated ? "ok'>OK" : "warn'>未校正") +
           "</td></tr>";
-  html += String("<tr><td>IMU Cal</td><td class='") +
-          (runtimeStatus_.imuCalibrated ? "ok'>OK" : "warn'>Not calibrated") +
+  html += String("<tr><td>IMU 校正</td><td class='") +
+          (runtimeStatus_.imuCalibrated ? "ok'>OK" : "warn'>未校正") +
           "</td></tr>";
-  html += String("<tr><td>Camera Gaze</td><td class='") +
-          (runtimeStatus_.cameraActive ? "ok'>Active" : "warn'>Off") +
+  html += String("<tr><td>カメラ目線</td><td class='") +
+          (runtimeStatus_.cameraActive ? "ok'>動作中" : "warn'>OFF") +
           "</td></tr>";
   html += String("<tr><td>Gaming RGB</td><td class='") +
-          (config_.gamingRgb ? "ok'>On" : "warn'>Off") +
+          (config_.gamingRgb ? "ok'>ON" : "warn'>OFF") +
           "</td></tr>";
-  html += F("</table></div>");
+  html += F("</table></section>");
 
   // --- 診断（クラッシュ調査用）---
   // Last Reset が PANIC=コードのクラッシュ、BROWNOUT=電源不足、
   // TASK/INT WDT=ハング、POWERON=正常な電源投入。
   // Max Alloc が Free に比べて極端に小さい場合はヒープ断片化のサイン。
-  html += F("<div class='card'><h3>Diagnostics</h3><table>");
+  html += F("<section class='card'><h3>🩺 診断</h3><table>");
   {
     const char* rrClass = "ok";
     if (runtimeStatus_.resetReason == "PANIC" ||
@@ -599,20 +781,20 @@ String ConfigPortal::statusHtml() {
         runtimeStatus_.resetReason.indexOf("WDT") >= 0) {
       rrClass = "err";
     }
-    html += String("<tr><td>Last Reset</td><td class='") + rrClass + "'>" +
+    html += String("<tr><td>前回のリセット理由</td><td class='") + rrClass + "'>" +
             htmlEscape(runtimeStatus_.resetReason) + "</td></tr>";
   }
-  html += "<tr><td>Free Heap</td><td>" +
+  html += "<tr><td>空きヒープ</td><td>" +
           String(runtimeStatus_.freeHeap / 1024) + " KB</td></tr>";
-  html += String("<tr><td>Min Free Heap</td><td class='") +
+  html += String("<tr><td>最小空きヒープ</td><td class='") +
           (runtimeStatus_.minFreeHeap < 20000 ? "err" : "ok") + "'>" +
           String(runtimeStatus_.minFreeHeap / 1024) + " KB</td></tr>";
-  html += String("<tr><td>Max Alloc Block</td><td class='") +
+  html += String("<tr><td>最大確保ブロック</td><td class='") +
           (runtimeStatus_.maxAllocHeap < 12000 ? "err" : "ok") + "'>" +
           String(runtimeStatus_.maxAllocHeap / 1024) + " KB</td></tr>";
-  html += "<tr><td>Free PSRAM</td><td>" +
+  html += "<tr><td>空き PSRAM</td><td>" +
           String(runtimeStatus_.freePsram / 1024) + " KB</td></tr>";
-  html += F("</table></div>");
+  html += F("</table></section>");
 
   // --- システム情報 ---
   const uint32_t uptimeSec = millis() / 1000;
@@ -621,20 +803,16 @@ String ConfigPortal::statusHtml() {
            (unsigned long)(uptimeSec / 3600),
            (unsigned long)((uptimeSec % 3600) / 60),
            (unsigned long)(uptimeSec % 60));
-  const uint32_t freeHeap = ESP.getFreeHeap();
 
-  html += F("<div class='card'><h3>System</h3><table>");
-  html += "<tr><td>Uptime</td><td>" + String(uptime) + "</td></tr>";
-  html += "<tr><td>Free Heap</td><td>" + String(freeHeap / 1024) +
-          " KB <span class='sub'>(" + String(freeHeap) + " B)</span></td></tr>";
-  html += "<tr><td>CPU Freq</td><td>" +
+  html += F("<section class='card'><h3>⚙ システム</h3><table>");
+  html += "<tr><td>稼働時間</td><td>" + String(uptime) + "</td></tr>";
+  html += "<tr><td>CPU</td><td>" +
           String(ESP.getCpuFreqMHz()) + " MHz</td></tr>";
-  html += "<tr><td>Flash Size</td><td>" +
+  html += "<tr><td>Flash</td><td>" +
           String(ESP.getFlashChipSize() / 1024 / 1024) + " MB</td></tr>";
-  html += F("</table></div>");
+  html += F("</table></section>");
 
-  html += F("<p class='sub'>Auto-refreshes every 5 seconds</p>"
-            "</body></html>");
+  html += F("<p class='hint'>5 秒ごとに自動更新します</p></main></body></html>");
   return html;
 }
 
@@ -647,7 +825,12 @@ String ConfigPortal::wifiOptionsHtml() {
 
   const int count = WiFi.scanNetworks(false, true);
   if (count <= 0) {
-    options += F("<option value=''>No Wi-Fi networks found</option>");
+    options += F("<option value=''>Wi-Fi が見つかりません</option>");
+    if (!config_.wifiSsid.isEmpty()) {
+      options += "<option value='" + htmlEscape(config_.wifiSsid) +
+                 "' selected>" + htmlEscape(config_.wifiSsid) +
+                 "（保存済み）</option>";
+    }
     WiFi.scanDelete();
     return options;
   }
@@ -671,24 +854,24 @@ String ConfigPortal::wifiOptionsHtml() {
 
     const int32_t rssi = WiFi.RSSI(i);
     const char* strength =
-        rssi >= -55 ? "strong" : (rssi >= -70 ? "medium" : "weak");
+        rssi >= -55 ? "強" : (rssi >= -70 ? "中" : "弱");
     const bool secured = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
     const bool selected = ssid == config_.wifiSsid;
     currentSsidFound |= selected;
 
     options += "<option value='" + htmlEscape(ssid) + "'";
     if (selected) options += F(" selected");
-    options += ">" + htmlEscape(ssid) + " (" + String(strength) +
-               ", " + String(rssi) + " dBm";
-    if (secured) options += F(", secured");
-    options += F(")</option>");
+    options += ">" + htmlEscape(ssid) + "（" + String(strength) +
+               " " + String(rssi) + " dBm";
+    if (secured) options += F(" 🔒");
+    options += F("）</option>");
   }
 
   // 保存済みSSIDがスキャン結果にない場合（圏外など）は末尾に追加する
   if (!config_.wifiSsid.isEmpty() && !currentSsidFound) {
     options += "<option value='" + htmlEscape(config_.wifiSsid) +
                "' selected>" + htmlEscape(config_.wifiSsid) +
-               " (saved, not in range)</option>";
+               "（保存済み・圏外）</option>";
   }
 
   WiFi.scanDelete();
@@ -707,7 +890,7 @@ String ConfigPortal::apiStatusJson() {
   }
 
   String j;
-  j.reserve(360);
+  j.reserve(400);
   j += F("{\"ok\":true,\"connected\":");
   j += isConnected() ? F("true") : F("false");
   j += F(",\"speaking\":");
@@ -720,7 +903,9 @@ String ConfigPortal::apiStatusJson() {
   j += String(config_.ttsPort);
   j += F(",\"tts_engine\":\"");
   j += jsonEscape(config_.ttsEngineType);
-  j += F("\",\"reset_reason\":\"");
+  j += F("\",\"printer_monitor\":");
+  j += config_.bambuEnabled ? F("true") : F("false");
+  j += F(",\"reset_reason\":\"");
   j += jsonEscape(runtimeStatus_.resetReason);
   j += F("\",\"free_heap\":");
   j += String(runtimeStatus_.freeHeap);
