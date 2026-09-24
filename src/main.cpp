@@ -1374,48 +1374,85 @@ void drawModeMenu(ModeMenuButton pressed) {
   display.pushSprite(0, 0); // キャンバスを画面に転送（フリッカーフリー）
 }
 
-// SETTINGS選択時に表示するIPアドレス情報画面を描画する。
-// WiFi接続中なら緑色でURLを、APが起動中ならシアン色でAPのURLを表示する。
+// SETTINGS選択時に表示する接続情報画面を描画する。
+// Web ダッシュボード・設定画面の URL、設定用ホットスポット、プリンターの接続状態を出す。
 void drawSettingsInfo() {
   auto& display = startupCanvas();
   const int16_t width = display.width();
   const int16_t height = display.height();
+  const uint16_t bg = display.color565(14, 16, 20);
+  const uint16_t card = display.color565(30, 34, 43);
+  const uint16_t sub = display.color565(139, 146, 163);
+  const uint16_t green = display.color565(74, 222, 128);
+  const uint16_t cyan = display.color565(96, 165, 250);
 
-  display.fillScreen(TFT_BLACK);
-  display.setFont(&fonts::Font2);
-  display.setTextDatum(middle_center);
-  display.setTextColor(TFT_WHITE, TFT_BLACK);
-  display.setTextSize(2);
-  display.drawString("SETTINGS", width / 2, 20);
-
+  display.fillScreen(bg);
   display.setTextSize(1);
-  int16_t y = 50;
+  display.setFont(&fonts::lgfxJapanGothicP_16);
+  display.setTextDatum(middle_left);
+  display.setTextColor(TFT_WHITE, bg);
+  display.drawString("設定・接続情報", 12, 18);
 
-  // WiFi接続中の場合: ローカルIPアドレスのURLを表示
+  int16_t y = 38;
+  auto block = [&](const String& title, const String& line1, uint16_t color,
+                   const String& line2) {
+    const int16_t h = line2.isEmpty() ? 42 : 58;
+    display.fillRoundRect(8, y, width - 16, h, 10, card);
+    display.setTextDatum(top_left);
+    display.setTextColor(sub, card);
+    display.drawString(title, 18, y + 4);
+    display.setTextColor(color, card);
+    display.drawString(line1, 18, y + 22);
+    if (!line2.isEmpty()) {
+      display.setTextColor(sub, card);
+      display.drawString(line2, 18, y + 40);
+    }
+    y += h + 6;
+  };
+
+  // Wi-Fi 接続中: ブラウザで開く URL
   if (configPortal.isConnected()) {
-    const String url = "http://" + configPortal.localIp().toString() + "/";
-    display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    display.drawString("Open in browser (Wi-Fi):", width / 2, y);
-    y += 18;
-    display.setTextColor(TFT_GREEN, TFT_BLACK);
-    display.drawString(url, width / 2, y);
-    y += 26;
+    const String base = "http://" + configPortal.localIp().toString();
+    block("ブラウザで開く（同じ Wi-Fi）", base + "/", green,
+          "設定: " + base + "/settings");
   }
 
-  // SETTINGSメニュー用APが起動中の場合: ホットスポット情報を表示
+  // 設定用ホットスポット（192.168.4.1）
   if (configPortal.isSettingsApActive()) {
-    display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-    display.drawString("Hotspot: " + configPortal.accessPointName(), width / 2, y);
-    y += 16;
-    display.drawString("Password: stackchan", width / 2, y);
-    y += 18;
-    const String apUrl = "http://" + configPortal.settingsApIp().toString() + "/";
-    display.setTextColor(TFT_CYAN, TFT_BLACK);
-    display.drawString(apUrl, width / 2, y); // 192.168.4.1
+    block("ホットスポット " + configPortal.accessPointName(),
+          "http://" + configPortal.settingsApIp().toString() + "/", cyan,
+          "パスワード: stackchan");
   }
 
-  display.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  display.drawString("Tap to close", width / 2, height - 14);
+  // プリンターの接続状態
+  if (bambu.isEnabled()) {
+    const PrinterState s = bambu.snapshot();
+    String state;
+    uint16_t color = sub;
+    switch (s.link) {
+      case LinkState::Online:
+        state = String("接続中・") + printPhaseLabelJa(s.phase);
+        color = green;
+        break;
+      case LinkState::Error:
+        state = "接続エラー（state=" + String(s.mqttErrorCode) + "）";
+        color = display.color565(248, 113, 113);
+        break;
+      default:
+        state = "接続を試しています…";
+        break;
+    }
+    if (y + 42 <= height - 22) {
+      block("プリンター " + configPortal.config().bambuHost, state, color,
+            String());
+    }
+  } else if (y + 42 <= height - 22) {
+    block("プリンター", "未設定（Web の設定画面で登録）", sub, String());
+  }
+
+  display.setTextDatum(bottom_center);
+  display.setTextColor(sub, bg);
+  display.drawString("タップで閉じる", width / 2, height - 4);
   display.pushSprite(0, 0);
 }
 
