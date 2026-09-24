@@ -8,6 +8,8 @@ M5Stack StackChan（K151 / CoreS3）が **Bambu Lab P1S の印刷をリアルタ
 - プリンタ通信: [Xenoah/ESP32-bambu-MQTT](https://github.com/Xenoah/ESP32-bambu-MQTT)
   の Bambu Lab LAN MQTT 実装を StackChan 向けに再構成
 
+**現在のリリース: [v2.0.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.0.0)（Printer Commentary Edition）**
+
 ```mermaid
 flowchart LR
     P[Bambu Lab P1S] -->|MQTT over TLS :8883<br>push_status| S[StackChan CoreS3]
@@ -103,6 +105,15 @@ cd stackchan-mqtt
 
 ポートを指定する場合は `--upload-port COM4` を付けます。認識されないときは
 microSD スロット付近の RST ボタンを約3秒長押ししてダウンロードモードに入れます。
+
+ビルドせずに書き込む場合は、[Releases](https://github.com/Xenoah/stackchan-mqtt/releases) の
+`stackchan-mqtt-<版>-full.bin`（ブートローダー・パーティション・アプリを結合したもの）を 0x0 に書き込みます。
+
+```powershell
+python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.0.0-full.bin
+```
+
+アプリ部分だけの `firmware.bin`（0x10000）も添付しています。内蔵ボイスは下の手順で別に書き込みます。
 
 ### 1.5. 内蔵ボイスを書き込む（単体で喋らせる）
 

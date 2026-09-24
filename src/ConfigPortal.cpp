@@ -1,5 +1,6 @@
 #include "ConfigPortal.h"
 
+#include "Version.h"
 #include "WebPages.h"
 
 namespace {
@@ -864,6 +865,7 @@ String ConfigPortal::statusHtml() {
            (unsigned long)(uptimeSec % 60));
 
   html += F("<section class='card'><h3>⚙ システム</h3><table>");
+  html += "<tr><td>バージョン</td><td>" + String(kAppVersion) + "</td></tr>";
   html += "<tr><td>稼働時間</td><td>" + String(uptime) + "</td></tr>";
   html += "<tr><td>CPU</td><td>" +
           String(ESP.getCpuFreqMHz()) + " MHz</td></tr>";

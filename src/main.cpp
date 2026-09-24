@@ -27,6 +27,7 @@
 #include "PrintCommentator.h"
 #include "PrinterJson.h"
 #include "PrinterScreen.h"
+#include "Version.h"
 #include "VoiceVoxClient.h"
 #include "hardware_features.h"
 
@@ -1855,7 +1856,7 @@ void setup() {
   delay(100);
   const esp_reset_reason_t resetReason = esp_reset_reason();
   bootResetReason = resetReasonLabel(resetReason); // /status で表示する
-  Serial.printf("\nStackChan boot, reset reason=%d (%s)\n",
+  Serial.printf("\nStackChan boot %s, reset reason=%d (%s)\n", kAppVersion,
                 static_cast<int>(resetReason), bootResetReason.c_str());
 
   // まず最初にディスプレイを起動してフォールバック顔を表示する。
