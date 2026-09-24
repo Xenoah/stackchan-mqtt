@@ -1,10 +1,13 @@
-# StackChan × Termux Local LLM Gateway
+# StackChan × Bambu Lab 実況モニター（stackchan-mqtt）
 
-ブラウザ操作型ロボ端末プロジェクト。StackChan を「薄い再生クライアント」にし、
-Android Termux 上の Gateway が LLM 推論・音声生成・履歴管理をすべて担う。
-音声認識 (STT) は使わない。
+StackChan（CoreS3）が Bambu Lab P1S を LAN MQTT で監視し、印刷状況を声・表情・字幕・LED で
+実況するプロジェクト。stackchan-codex v1.1.5 をベースに、ESP32-bambu-MQTT の
+Bambu LAN MQTT 実装を StackChan 向けに再構成した。プリンター関連は **Part E** を参照。
 
-- ベース: release tag **β3.5.0**（simple_wav 方式）
+以下 Part A〜D はベース（stackchan-codex）の仕様。StackChan は「薄い再生クライアント」で、
+Android Termux 上の Gateway が LLM 推論・音声生成・履歴管理を担う（STT は使わない）。
+
+- ベース: stackchan-codex v1.1.5（release tag β3.5.0 の simple_wav 方式を発展）
 - main ブランチの ConversationController/STT/LLM 分離実装は**使わない**
 
 ---
@@ -147,6 +150,36 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 
 ---
 
+## Part E: Bambu Lab P1S 監視と実況（2026-09-24 / v2.0.0）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| E1 | MQTT クライアント | `BambuMqttClient`: `mqtts://<ip>:8883`、`bblp` / アクセスコード、`setInsecure()`。専用 FreeRTOS タスク（コア0、12KB スタック）で接続・`loop()`。失敗しても停止せず 3〜60 秒の指数バックオフで再接続。接続時と10分ごとに pushall（手動は20秒間隔に制限）。送信は retain=false。コマンドは pushall とチャンバーライト（`system.ledctrl`）のみ | ✅ |
+| E2 | 状態モデル | `PrinterState`: P1 系の差分 push をフィールド単位でマージ。`gcode_state`/`mc_percent`/`mc_remaining_time`/`layer_num`/`total_layer_num`/`stg_cur`/`print_error`/`spd_lvl`/温度/ファン/AMS/HMS/ライト。ArduinoJson フィルタで必要項目だけ解析、受信バッファ 24KB（PSRAM）。共有はミューテックス＋コピー（`snapshot()`）と `revision()` | ✅ |
+| E3 | 実況エンジン | `PrintCommentator`: 前回スナップショットとの差分→優先度付きキュー（High は Low/Normal を押しのける、Low は待ちがあれば捨てる、古い Normal は90秒で破棄）。開始/工程/温度/進捗/1層目/最終層/残り10分/AMS切替/一時停止（理由待ち1.5秒）/再開/完了（所要時間・喜びモーション）/失敗/キャンセル（`0x0300400C`）/HMS/print_error/接続断(30秒)/未接続(45秒・原因別ヒント)/定期報告/状況報告 | ✅ |
+| E4 | 顔 HUD | `FaceHud` + `HudMouth`: 全顔テンプレートの口 Drawable を包み、m5avatar の 1bit 顔スプライト内に HUD を描く（描画タスク内で完結し LCD 取り合いなし）。上段=状態チップ(警告時点滅)/進捗%/残り/進捗バー、下段=層・温度・ジョブ名・完成予定、実況中は2行字幕（3行以上は3.2秒ページ送り、約物ぶら下げ）。`showStatus` は HUD 表示中トースト表示に切替。HUD 表示中は呼吸ズームを停止 | ✅ |
+| E5 | 本体 UI | 顔タップ→フルカラーのプリンター詳細画面（`PrinterScreen`）。メニューを2×3タイル化（プリンター/実況の声/LOCAL LLM/LEVEL HOLD/設定/閉じる）。LED 進捗リング（左右6灯、端数灯が脈動、準備=青呼吸、一時停止=黄点滅、完了=緑5分、失敗=赤点滅5分）。起動時サーボ確認は10秒無操作で NO | ✅ |
+| E6 | Web UI | `/` をダッシュボード化（PROGMEM 静的 HTML が `/api/printer` を2秒ごとにポーリング）。`/settings`・`/status` を日本語・共通 `/app.css` で再デザイン。API: `/api/printer`、`/report`、`/refresh`、`/light`、`/voice`、`/say` | ✅ |
+| E7 | 設定 | NVS: `bb_on`/`bb_host`/`bb_serial`/`bb_code`（コードは再表示しない）、`cm_voice`/`cm_step`/`cm_period`/`cm_stages`/`cm_temps`、`hud`/`led_prog`/`tz`（既定 `JST-9`、NTP は ntp.nict.jp ほか） | ✅ |
+| E8 | Gateway | `/synthesis` 本文 `__SAY__<文章>` を LLM なしで読み上げ（`say.wav`、ロック付き）。simple_wav 時はファームが実況文に接頭辞を付ける | ✅ |
+
+### 設計メモ
+- HTTP ハンドラは TTS 再生中（`serviceApp()` のネスト）にも走るため、Web からの「話して」系は
+  `commentator.enqueue()` に積むだけにし、実際の発話は `loop()` の `performComment()` で行う。
+- `performComment()` は `speaking=true` の間 `playTts()` をブロッキング実行。その間も
+  `serviceApp()` → `updatePrinterMonitor()` で状態取り込みと実況判定は続く。
+- 16bit のフルスクリーン canvas（メニュー/詳細画面）は `setPsram(true)` で PSRAM に置く。
+  mbedTLS は内部 RAM（`CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC`）で約40KB使うため。
+- `stg_cur` の意味は OpenBambuAPI / ha-bambulab のコミュニティ調査に基づく（`stageLabelJa()`）。
+
+### 既知の制約
+- ホスト環境に C++ コンパイラが無く、実況ロジックの単体テストは未整備（実機ログ `[commentary]` で確認）。
+- 実機（P1S）での通し確認は未実施。確認観点: 接続（state=5 はアクセスコード誤り）、pushall サイズ、
+  HUD の字幕の折り返し、LED の左右の並び順、完了時の喜びモーション。
+- 設定変更は保存→再起動で反映（実況の声 ON/OFF のみ即時反映・NVS 保存）。
+
+---
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
@@ -160,3 +193,5 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
   ゲーミングRGB(D2–D4) を実装：顔(画面)＋本体LEDを虹色循環、設定ON/OFF・NVS保存。
   ファーム build 成功（RAM 18.2%, Flash 18.4%）。**v1.1.5（Gaming RGB Edition）としてリリース**。
   README.md / CLAUDE.md / CHANGELOG.md を更新。
+- 2026-09-24: stackchan-mqtt として分離。Bambu Lab P1S の LAN MQTT 監視と実況（Part E）を実装。
+  ファーム build 成功（RAM 19.5%, Flash 22.8%）。Gateway `__SAY__` は TestClient で確認。

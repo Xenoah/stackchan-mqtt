@@ -67,6 +67,20 @@ mkdir -p ~/models   # ~/models/model.gguf を配置
 - `simple_wav` では音声生成は Gateway 側で行うため、StackChan 側の `Speaker / Style ID`
   を変えても声色は変わらない。声色は Gateway UI の「TTS音声」で変更する。
 
+### プリンター実況（stackchan-mqtt）
+
+StackChan の TTS Engine Type を `simple_wav` にしてプリンター監視を有効にすると、
+StackChan は実況文を `__SAY__` 接頭辞つきで `POST /synthesis` に送ります
+（例: `__SAY__印刷完了！おつかれさま！`）。Gateway は LLM を使わず、現在の音声設定
+（TTS音声・ピッチ・音量・速度・漢字→かな変換）でその文章を WAV にして返します。
+生成した音声は `~/stackchan_gateway/say.wav` に上書き保存され、履歴には残りません。
+
+```bash
+curl -X POST http://127.0.0.1:50021/synthesis \
+  -H "Content-Type: text/plain; charset=utf-8" \
+  --data "__SAY__ベッドを温めてるよ" --output say.wav
+```
+
 ## 保存データ
 
 ```
@@ -74,6 +88,7 @@ mkdir -p ~/models   # ~/models/model.gguf を配置
   settings.json     # 設定（パスワードは salt+sha256 ハッシュ）
   current.json      # 現在の発話対象メタ
   current.wav       # 現在の発話 WAV
+  say.wav           # 直近のプリンター実況 WAV（__SAY__）
   history/          # 履歴 {id}.json / {id}.wav
   logs/             # llama.log / gateway.log
 ```
@@ -89,7 +104,7 @@ mkdir -p ~/models   # ~/models/model.gguf を配置
 | POST | `/ask` | 質問 → LLM → WAV → 保存 →（auto_speak）発話 |
 | POST | `/voice/rebuild` | 音声だけ再生成 |
 | GET | `/current.wav` | 現在の WAV（試聴用） |
-| POST | `/synthesis` | **StackChan 専用**。`__REASK_LAST__` で再 LLM、通常は current.wav |
+| POST | `/synthesis` | **StackChan 専用**。`__REASK_LAST__` で再 LLM、`__SAY__<文章>` で文章をそのまま読み上げ（プリンター実況）、それ以外は current.wav |
 | POST | `/stackchan/speak` | StackChan の `/api/speak` を呼ぶ |
 | GET | `/history` | 履歴一覧(JSON) |
 | POST | `/history/{id}/speak` | 履歴を current にして発話 |
