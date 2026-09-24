@@ -28,6 +28,7 @@ h3{margin:0 0 12px;font-size:15px;color:var(--sub);font-weight:700;letter-spacin
 label{display:block;margin-top:14px;font-size:14px}
 input,select,textarea{box-sizing:border-box;width:100%;padding:11px 12px;margin-top:6px;border-radius:10px;border:1px solid var(--line);background:var(--card2);color:var(--text);font-size:15px;font-family:inherit}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--blue);outline-offset:-1px}
+input[type=range]{padding:0;border:0;background:none;accent-color:var(--acc);height:28px}
 label.check{display:flex;align-items:center;gap:10px;margin-top:14px}
 label.check input{width:22px;height:22px;margin:0;flex:none;accent-color:var(--acc)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}

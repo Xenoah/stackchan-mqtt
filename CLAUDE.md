@@ -160,7 +160,7 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 | E4 | 顔 HUD | `FaceHud` + `HudMouth`: 全顔テンプレートの口 Drawable を包み、m5avatar の 1bit 顔スプライト内に HUD を描く（描画タスク内で完結し LCD 取り合いなし）。上段=状態チップ(警告時点滅)/進捗%/残り/進捗バー、下段=層・温度・ジョブ名・完成予定、実況中は2行字幕（3行以上は3.2秒ページ送り、約物ぶら下げ）。`showStatus` は HUD 表示中トースト表示に切替。HUD 表示中は呼吸ズームを停止 | ✅ |
 | E5 | 本体 UI | 顔タップ→フルカラーのプリンター詳細画面（`PrinterScreen`）。メニューを2×3タイル化（プリンター/実況の声/LOCAL LLM/LEVEL HOLD/設定/閉じる）。LED 進捗リング（左右6灯、端数灯が脈動、準備=青呼吸、一時停止=黄点滅、完了=緑5分、失敗=赤点滅5分）。起動時サーボ確認は10秒無操作で NO | ✅ |
 | E6 | Web UI | `/` をダッシュボード化（PROGMEM 静的 HTML が `/api/printer` を2秒ごとにポーリング）。`/settings`・`/status` を日本語・共通 `/app.css` で再デザイン。API: `/api/printer`、`/report`、`/refresh`、`/light`、`/voice`、`/say` | ✅ |
-| E7 | 設定 | NVS: `bb_on`/`bb_host`/`bb_serial`/`bb_code`（コードは再表示しない）、`cm_voice`/`cm_step`/`cm_period`/`cm_stages`/`cm_temps`、`hud`/`led_prog`/`tz`（既定 `JST-9`、NTP は ntp.nict.jp ほか） | ✅ |
+| E7 | 設定 | NVS: `bb_on`/`bb_host`/`bb_serial`/`bb_code`（コードは再表示しない）、`cm_voice`/`cm_step`/`cm_period`/`cm_stages`/`cm_temps`、`hud`/`led_prog`/`tz`（既定 `JST-9`、NTP は ntp.nict.jp ほか）、`quiet_on`/`quiet_from`/`quiet_to`（夜間は High だけ声に出す。日付またぎ対応・時刻未同期なら無効）、`volume`（M5.Speaker 0〜255） | ✅ |
 | E8 | Gateway | `/synthesis` 本文 `__SAY__<文章>` を LLM なしで読み上げ（`say.wav`、ロック付き）。simple_wav 時はファームが実況文に接頭辞を付ける | ✅ |
 
 ### 設計メモ

@@ -987,6 +987,21 @@ void showMoodLed(CommentMood mood) {
   }
 }
 
+// 夜間（設定の開始〜終了時刻）かどうか。時刻が未同期なら夜間扱いにしない。
+bool inQuietHours() {
+  const AppConfig& c = configPortal.config();
+  if (!c.quietEnabled || c.quietFrom == c.quietTo) return false;
+  const time_t now = time(nullptr);
+  if (now < 1700000000) return false;
+  struct tm t;
+  localtime_r(&now, &t);
+  const int h = t.tm_hour;
+  if (c.quietFrom < c.quietTo) {
+    return h >= c.quietFrom && h < c.quietTo;
+  }
+  return h >= c.quietFrom || h < c.quietTo;  // 日付をまたぐ（例: 23時〜7時）
+}
+
 // 字幕だけ出すときの表示時間（文字数からおおよその読了時間を見積もる）
 uint32_t captionDurationMs(const String& text) {
   const uint32_t chars = text.length() / 3;  // UTF-8 の日本語は1文字3バイト
@@ -1045,8 +1060,10 @@ void performComment(Comment comment) {
   }
 
   FaceHud& hud = avatarFace.hud();
+  // 夜間は High（完了・失敗・エラー・手動の依頼）だけ声に出し、ほかは字幕のみ
   const bool voice =
-      configPortal.config().commentaryVoice && configPortal.isConnected();
+      configPortal.config().commentaryVoice && configPortal.isConnected() &&
+      !(inQuietHours() && comment.priority != CommentPriority::High);
   uint32_t holdMs = captionDurationMs(comment.text);
   if (voice) {
     hud.setCaption(comment.text, 0);  // 喋り終わるまで出し続ける
@@ -1074,7 +1091,9 @@ void performComment(Comment comment) {
 
 // 頭タップ: いまの状況をまとめて話す
 void reportPrinterStatus() {
-  performComment(commentator.statusReport(bambu.snapshot()));
+  Comment report = commentator.statusReport(bambu.snapshot());
+  report.priority = CommentPriority::High;  // 直接たずねられたので夜間でも答える
+  performComment(report);
 }
 
 // HUD の表示内容をプリンタ状態から作る
@@ -1889,6 +1908,7 @@ void setup() {
 
   Serial.println("Starting network configuration...");
   const bool wifiConnected = configPortal.begin();
+  M5.Speaker.setVolume(configPortal.config().speakerVolume);  // 保存済みの音量
 
   // ゲーミングRGB（顔の虹色循環）を設定値に従って有効化する
   avatarFace.setGamingRgb(configPortal.config().gamingRgb);

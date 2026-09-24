@@ -19,6 +19,8 @@ Printer Commentary Edition。stackchan-mqtt として分離し、Bambu Lab P1S �
 - Web ダッシュボード（`/`）と `/api/printer` 系 API（状況報告・再取得・ライト・実況 ON/OFF・テスト発話）
 - プリンター・実況・表示の設定項目（NVS 保存）、NTP による完成予定時刻
 - Gateway `/synthesis` の `__SAY__<文章>` 読み上げ
+- 夜間モード（既定 23時〜7時は重要な実況だけ声に出す）とスピーカー音量の設定
+- 本体メニューの「設定」画面を刷新（ダッシュボード URL・ホットスポット・プリンター接続状態）
 
 ### Changed
 

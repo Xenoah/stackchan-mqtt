@@ -39,6 +39,10 @@ struct AppConfig {
   uint16_t commentaryPeriodMin = 15; // 無言が続いたときの定期報告（分、0 = しない）
   bool commentaryStages = true;      // 準備工程（レベリング・加熱など）を実況
   bool commentaryTemps = true;       // 目標温度到達を実況
+  bool quietEnabled = true;          // 夜間は重要な実況だけ喋る
+  uint8_t quietFrom = 23;            // 夜間の開始（時）
+  uint8_t quietTo = 7;               // 夜間の終了（時）
+  uint8_t speakerVolume = 255;       // スピーカー音量（0〜255）
 
   // --- 表示 ---
   bool printerHud = true;            // 顔の上にプリンタ HUD を重ねる

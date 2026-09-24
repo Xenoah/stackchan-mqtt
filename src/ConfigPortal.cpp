@@ -225,6 +225,10 @@ void ConfigPortal::load() {
       preferences_.getBool("cm_stages", config_.commentaryStages);
   config_.commentaryTemps =
       preferences_.getBool("cm_temps", config_.commentaryTemps);
+  config_.quietEnabled = preferences_.getBool("quiet_on", config_.quietEnabled);
+  config_.quietFrom = preferences_.getUChar("quiet_from", config_.quietFrom);
+  config_.quietTo = preferences_.getUChar("quiet_to", config_.quietTo);
+  config_.speakerVolume = preferences_.getUChar("volume", config_.speakerVolume);
   config_.printerHud = preferences_.getBool("hud", config_.printerHud);
   config_.ledProgress = preferences_.getBool("led_prog", config_.ledProgress);
   config_.timezone = preferences_.getString("tz", config_.timezone);
@@ -253,6 +257,10 @@ void ConfigPortal::save() {
   preferences_.putUShort("cm_period", config_.commentaryPeriodMin);
   preferences_.putBool("cm_stages", config_.commentaryStages);
   preferences_.putBool("cm_temps", config_.commentaryTemps);
+  preferences_.putBool("quiet_on", config_.quietEnabled);
+  preferences_.putUChar("quiet_from", config_.quietFrom);
+  preferences_.putUChar("quiet_to", config_.quietTo);
+  preferences_.putUChar("volume", config_.speakerVolume);
   preferences_.putBool("hud", config_.printerHud);
   preferences_.putBool("led_prog", config_.ledProgress);
   preferences_.putString("tz", config_.timezone);
@@ -363,6 +371,12 @@ void ConfigPortal::registerRoutes() {
         constrain(server_.arg("cm_period").toInt(), 0, 240);
     config_.commentaryStages = server_.hasArg("cm_stages");
     config_.commentaryTemps = server_.hasArg("cm_temps");
+    config_.quietEnabled = server_.hasArg("quiet_on");
+    config_.quietFrom = constrain(server_.arg("quiet_from").toInt(), 0, 23);
+    config_.quietTo = constrain(server_.arg("quiet_to").toInt(), 0, 23);
+    if (server_.hasArg("volume")) {
+      config_.speakerVolume = constrain(server_.arg("volume").toInt(), 0, 255);
+    }
     config_.printerHud = server_.hasArg("hud");
     config_.ledProgress = server_.hasArg("led_progress");
     String tz = server_.arg("tz");
@@ -559,6 +573,28 @@ String ConfigPortal::pageHtml(const String& message) {
                    "準備工程（レベリング・加熱・ノズル清掃など）を実況");
   html += checkbox("cm_temps", config_.commentaryTemps,
                    "ノズル・ベッドが目標温度になったら実況");
+  html += checkbox("quiet_on", config_.quietEnabled,
+                   "夜間は重要な実況（完了・失敗・エラー）だけ声に出す");
+  {
+    static const int kHourValues[] = {0,  1,  2,  3,  4,  5,  6,  7,
+                                      8,  9,  10, 11, 12, 13, 14, 15,
+                                      16, 17, 18, 19, 20, 21, 22, 23};
+    static const char* const kHourLabels[] = {
+        "0時",  "1時",  "2時",  "3時",  "4時",  "5時",  "6時",  "7時",
+        "8時",  "9時",  "10時", "11時", "12時", "13時", "14時", "15時",
+        "16時", "17時", "18時", "19時", "20時", "21時", "22時", "23時"};
+    html += F("<div class='grid2'><label>夜間の開始<select name='quiet_from'>");
+    html += numberOptions(config_.quietFrom, kHourValues, kHourLabels, 24);
+    html += F("</select></label><label>夜間の終了<select name='quiet_to'>");
+    html += numberOptions(config_.quietTo, kHourValues, kHourLabels, 24);
+    html += F("</select></label></div>");
+  }
+  html += F("<label>スピーカー音量 <span class='hint' id='volv'>");
+  html += String(config_.speakerVolume);
+  html += F("</span><input type='range' name='volume' min='0' max='255' "
+            "oninput=\"document.getElementById('volv').textContent=this.value\" value='");
+  html += String(config_.speakerVolume);
+  html += F("'></label>");
   html += F("<p class='hint'>開始・一時停止・完了・失敗・HMS エラーは常に実況します。"
             "頭をタップすると今の状況を話します。</p></section>");
 
