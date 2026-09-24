@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- 内蔵ボイス: `tools/make_voice_pack.py` で VOICEVOX のずんだもんの声をボイスパック化し、
+  `pio run -t uploadfs` で本体に焼き込む。TTS サーバーなしで単体でも実況できる
+- TTS エンジン「内蔵ボイス」。サーバー指定でもつながらないときは自動で内蔵ボイスに切り替え
+- 起動時のあいさつ（内蔵ボイス）
+
+### Changed
+
+- パーティション構成を変更（アプリ 3MB + LittleFS 12.8MB、NVS の位置は据え置き）
+- TTS サーバーへの接続タイムアウトを 30 秒から 4 秒に短縮
+
 ## [v2.0.0] - 2026-09-24
 
 Printer Commentary Edition。stackchan-mqtt として分離し、Bambu Lab P1S の印刷を

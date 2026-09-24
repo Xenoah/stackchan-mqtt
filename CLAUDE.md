@@ -180,6 +180,25 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 
 ---
 
+## Part F: 内蔵ボイス（TTS サーバーなしで喋る）（2026-09-24）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| F1 | ボイスパック生成 | `tools/make_voice_pack.py`: `src/PrintCommentator.cpp`・`src/PrinterState.cpp` の日本語文字列リテラル（書式指定を含むものは除く）＋材質名・あいさつ＋数字キー `#N`（0〜99・百の位・千の位）＋促音/連濁つき `=N単位`（%・分・時間・時・層・件）を VOICEVOX で合成。先頭の句読点は読み上げから外す。前後の無音を詰め、G.711 μ-law 12kHz（SNR 約37dB、約8.5MB）で `data/voice.pak`。IMA-ADPCM 16kHz も `--codec adpcm` で選べるが声では SNR 15dB 前後でザラつく。`.pio/voice_cache` に合成結果をキャッシュ | ✅ |
+| F2 | パーティション | `partitions.csv`: nvs/otadata は既定と同じ位置、app0 3MB（OTA なし）、LittleFS（ラベル spiffs）12.8MB。**このファイルは ASCII のみ**（PlatformIO が cp1252 で読む） | ✅ |
+| F3 | 再生 | `BuiltinVoice`: 索引を PSRAM に読み、先頭バイトごとのバケットで最長一致。数字は数字で始まる断片を優先→なければ千・百の位＋`=N単位`（単位で始まる長い断片があれば使わない）→`#N`。「」内は「作品」。句読点は間（。220ms、、110ms）。3面バッファで `playRaw`、TtsClient と同じ基準で口パク | ✅ |
+| F4 | 切り替え | エンジン `builtin` を追加。`speakSentence()`: サーバー指定でも失敗したら内蔵ボイスで言い直し、3分間はサーバーを休ませる。`speakText()`（A ボタン・/api/speak）も Wi-Fi なし・失敗時は内蔵ボイス（読めなければあいさつ）。TtsClient の接続タイムアウトを 30s→4s。起動時に内蔵ボイスであいさつ（実況の声 OFF なら無し） | ✅ |
+
+### 検証
+- パックを Python で読み戻し、μ-law の往復 SNR 約 37dB を確認。
+- 分解規則を Python で再現し、代表的な実況文 20 件がすべて読み飛ばしなしで分解できることを確認。
+- 実機: `[voice] builtin voice ready: 678 clips, mulaw 12000Hz`。TTS サーバー到達不能時に `/api/speak` →
+  4 秒後に内蔵ボイスへ切り替わり再生（`[voice] builtin: 3 steps`）。
+- 注意: ESP32-S3 の USB シリアルはポートを開閉すると DTR/RTS でリセットされることがある。
+  ログを取るときは DTR/RTS を下げたまま開く。
+
+---
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
@@ -195,3 +214,4 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
   README.md / CLAUDE.md / CHANGELOG.md を更新。
 - 2026-09-24: stackchan-mqtt として分離。Bambu Lab P1S の LAN MQTT 監視と実況（Part E）を実装。
   ファーム build 成功（RAM 19.5%, Flash 22.8%）。Gateway `__SAY__` は TestClient で確認。
+- 2026-09-24: 内蔵ボイス（Part F）。VOICEVOX でボイスパックを作り LittleFS へ焼き、TTS サーバーなしで実況できるようにした。

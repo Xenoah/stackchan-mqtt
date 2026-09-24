@@ -14,7 +14,7 @@ struct AppConfig {
   String ttsHost = "192.168.1.2";              // TTSサーバのIPアドレス
   uint16_t ttsPort = 50021;                    // TTSサーバのポート番号
   String ttsSpeaker = "3";                     // 話者ID（VoiceVox: ずんだもんノーマル=3）
-  String ttsEngineType = "voicevox_compatible"; // TTSエンジン種別
+  String ttsEngineType = "voicevox_compatible"; // TTSエンジン種別（builtin = 内蔵ボイス）
   String speechText =
       "Hello! I am Zundamon. I can now talk using StackChan!"; // Aボタンで話すデフォルトテキスト
 
@@ -74,6 +74,7 @@ struct RuntimeStatus {
   uint32_t maxAllocHeap = 0;    // 確保可能な最大連続ブロック（フラグメント指標）
   uint32_t freePsram = 0;       // 空きPSRAM（バイト）
   bool cameraActive = false;    // カメラ目線が動作中かどうか
+  uint16_t voiceClips = 0;      // 内蔵ボイスのクリップ数（0 = 未書き込み）
 };
 
 // WiFi接続・設定用Webサーバを管理するクラス。

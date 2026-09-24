@@ -13,6 +13,8 @@ constexpr size_t kAudioBufferSize = 2048; // バッファ1個あたり2KB
 
 // ネットワーク操作のタイムアウト（30秒）
 constexpr uint32_t kNetworkTimeoutMs = 30000;
+// TCP 接続のタイムアウト。LAN 内なら数秒で十分で、サーバー停止時に長く固まらないよう短くする
+constexpr uint32_t kConnectTimeoutMs = 4000;
 
 // 4バイトアライメントで確保（M5Speakerのplayrawが4バイトアライメントを要求）
 alignas(4) uint8_t audioBuffers[kAudioBufferCount][kAudioBufferSize];
@@ -66,7 +68,7 @@ bool TtsClient::speakVoiceVoxCompatible(
 
   // ステップ1: audio_query リクエスト
   HTTPClient queryHttp;
-  queryHttp.setConnectTimeout(kNetworkTimeoutMs);
+  queryHttp.setConnectTimeout(kConnectTimeoutMs);
   queryHttp.setTimeout(kNetworkTimeoutMs);
   if (!queryHttp.begin(queryUrl)) {
     lastError_ = "audio_query begin failed";
@@ -91,7 +93,7 @@ bool TtsClient::speakVoiceVoxCompatible(
   const String synthesisUrl =
       endpoint(config, "/synthesis") + "?speaker=" + speaker;
   HTTPClient synthesisHttp;
-  synthesisHttp.setConnectTimeout(kNetworkTimeoutMs);
+  synthesisHttp.setConnectTimeout(kConnectTimeoutMs);
   synthesisHttp.setTimeout(kNetworkTimeoutMs);
   if (!synthesisHttp.begin(synthesisUrl)) {
     lastError_ = "synthesis begin failed";
@@ -121,7 +123,7 @@ bool TtsClient::speakVoiceVoxCompatible(
 bool TtsClient::speakSimpleWav(
     const TtsConfig& config, const String& text) {
   HTTPClient synthesisHttp;
-  synthesisHttp.setConnectTimeout(kNetworkTimeoutMs);
+  synthesisHttp.setConnectTimeout(kConnectTimeoutMs);
   synthesisHttp.setTimeout(kNetworkTimeoutMs);
   if (!synthesisHttp.begin(endpoint(config, "/synthesis"))) {
     lastError_ = "simple_wav synthesis begin failed";

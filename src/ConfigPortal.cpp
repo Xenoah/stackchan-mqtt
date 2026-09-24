@@ -37,7 +37,8 @@ String htmlEscape(const String& value) {
 // TTSエンジン種別の文字列を正規化する。
 // 不正な値が来た場合はデフォルトの "voicevox_compatible" を返す。
 String sanitizedTtsEngineType(const String& value) {
-  return value == "simple_wav" ? "simple_wav" : "voicevox_compatible";
+  if (value == "simple_wav" || value == "builtin") return value;
+  return "voicevox_compatible";
 }
 
 // 文字列をJSON文字列値としてエスケープする（"\ と制御文字を処理）。
@@ -644,7 +645,19 @@ String ConfigPortal::pageHtml(const String& message) {
   html += "<option value='simple_wav'" +
           selectedAttribute(config_.ttsEngineType, "simple_wav") +
           ">simple_wav（Android Gateway）</option>";
-  html += F("</select></label><div class='grid2'><label>ホスト<input name='tts_host' value='");
+  html += "<option value='builtin'" +
+          selectedAttribute(config_.ttsEngineType, "builtin") +
+          ">内蔵ボイス（本体だけで喋る・オフライン）</option>";
+  html += F("</select></label><p class='hint'>");
+  if (runtimeStatus_.voiceClips > 0) {
+    html += "内蔵ボイス: " + String(runtimeStatus_.voiceClips) +
+            " フレーズ書き込み済み。サーバーを選んでいても、つながらないときは"
+            "自動で内蔵ボイスに切り替わります。";
+  } else {
+    html += F("内蔵ボイスは未書き込みです（tools/make_voice_pack.py → "
+              "pio run -t uploadfs）。");
+  }
+  html += F("</p><div class='grid2'><label>ホスト<input name='tts_host' value='");
   html += htmlEscape(config_.ttsHost);
   html += F("'></label><label>ポート<input type='number' name='tts_port' "
             "min='1' max='65535' value='");
@@ -790,6 +803,11 @@ String ConfigPortal::statusHtml() {
   html += "<tr><td>ポート</td><td>" + String(config_.ttsPort) + "</td></tr>";
   html += "<tr><td>話者 ID</td><td>" +
           htmlEscape(config_.ttsSpeaker) + "</td></tr>";
+  html += String("<tr><td>内蔵ボイス</td><td class='") +
+          (runtimeStatus_.voiceClips > 0
+               ? "ok'>" + String(runtimeStatus_.voiceClips) + " フレーズ"
+               : String("warn'>未書き込み")) +
+          "</td></tr>";
   html += F("</table></section>");
 
   // --- アプリ状態 ---

@@ -21,6 +21,7 @@
 
 #include "AvatarFaceController.h"
 #include "BambuMqttClient.h"
+#include "BuiltinVoice.h"
 #include "CalibrationController.h"
 #include "ConfigPortal.h"
 #include "PrintCommentator.h"
@@ -34,6 +35,10 @@ AvatarFaceController avatarFace;          // アバター描画・アニメー�
 CalibrationController calibrationController; // サーボ・IMUキャリブレーション
 ConfigPortal configPortal;               // WiFi接続・設定Webサーバ
 TtsClient ttsClient;                     // TTS音声合成クライアント
+BuiltinVoice builtinVoice;               // 内蔵ボイス（TTS サーバーなしで喋る）
+uint32_t ttsServerDownAt = 0;            // TTS サーバーに失敗した時刻（0 = 正常）
+constexpr uint32_t kTtsServerRetryMs = 3UL * 60UL * 1000UL; // 失敗後は3分間 内蔵ボイスを使う
+constexpr char kBuiltinGreeting[] = "こんにちは！スタックチャンだよ";
 BambuMqttClient bambu;                   // Bambu Lab プリンタ LAN MQTT（専用タスク）
 PrintCommentator commentator;            // 印刷状況の実況エンジン
 
@@ -53,6 +58,7 @@ constexpr uint32_t kPhaseLedHoldMs = 5UL * 60UL * 1000UL;  // 完了/失敗の L
 
 void updatePrinterMonitor(uint32_t now);
 bool updatePrinterLed(uint32_t now);
+String ttsTextFor(const String& text);
 
 // 口パク同期の設定
 constexpr uint32_t LIP_FRAME_INTERVAL_MS = 30;  // 口パク更新間隔（30ms）
@@ -878,6 +884,7 @@ void serviceApp() {
     status.maxAllocHeap = ESP.getMaxAllocHeap();
     status.freePsram = ESP.getFreePsram();
     status.cameraActive = cameraGazeActive;
+    status.voiceClips = builtinVoice.isReady() ? builtinVoice.clipCount() : 0;
     configPortal.setRuntimeStatus(status);
     lastStatusUpdateAt = now;
   }
@@ -909,13 +916,40 @@ bool playTts(const String& text) {
   return success;
 }
 
+// 実況などの文章を喋る。
+//   - エンジンが内蔵ボイスなら内蔵ボイスで喋る
+//   - サーバー指定ならサーバーで喋り、失敗したら内蔵ボイスで言い直す。
+//     失敗後の3分間はサーバーを試さず（接続待ちで固まらないよう）内蔵ボイスを使う
+bool speakSentence(const String& text) {
+  if (configPortal.config().ttsEngineType == "builtin") {
+    return builtinVoice.speak(text);
+  }
+  const uint32_t now = millis();
+  const bool serverResting =
+      ttsServerDownAt != 0 && now - ttsServerDownAt < kTtsServerRetryMs;
+  if (configPortal.isConnected() && (!serverResting || !builtinVoice.isReady())) {
+    if (playTts(ttsTextFor(text))) {
+      ttsServerDownAt = 0;
+      return true;
+    }
+    ttsServerDownAt = now == 0 ? 1 : now;
+    Serial.printf("TTS server failed (%s), using builtin voice\n",
+                  ttsClient.lastError().c_str());
+  }
+  return builtinVoice.speak(text);
+}
+
 // 指定テキストをTTSで読み上げる（共通処理）。
 // 話し中・WiFi未接続・ショーケース中の場合は早期リターンする。
 // simple_wav エンジンではこの text がそのまま Gateway の /synthesis に POST される。
 //   - 設定テキスト "__REASK_LAST__"（Aボタン）→ Gateway が最後の質問を再LLM処理
 //   - "__CURRENT__"（/api/speak 既定）→ Gateway が current.wav を返す
 void speakText(const String& text) {
-  if (speaking || !configPortal.isConnected()) {
+  // サーバーを使うのは「サーバー指定かつ Wi-Fi 接続中」のときだけ。
+  // それ以外（内蔵ボイス指定・Wi-Fi なし）は内蔵ボイスで喋る。
+  const bool useServer = configPortal.config().ttsEngineType != "builtin" &&
+                         configPortal.isConnected();
+  if (speaking || (!useServer && !builtinVoice.isReady())) {
     return;
   }
 
@@ -929,7 +963,12 @@ void speakText(const String& text) {
   avatarFace.showStatus("TTS", 900);
   showStatusLed(0, 0, 96); // 青色LED: TTS通信中
 
-  const bool success = playTts(text);
+  bool success = useServer && playTts(text);
+  // サーバーが使えない・失敗したら内蔵ボイスで。読めない文章（英文や
+  // Gateway 用の __CURRENT__ など）はあいさつに置き換える。
+  if (!success && builtinVoice.isReady()) {
+    success = builtinVoice.speak(text) || builtinVoice.speak(kBuiltinGreeting);
+  }
 
   if (success) {
     avatarFace.resetToDefault();
@@ -943,6 +982,18 @@ void speakText(const String& text) {
   }
 
   speaking = false;
+}
+
+// 起動時のあいさつ（内蔵ボイスがあるときだけ。スピーカーの動作確認も兼ねる）
+void greetOnBoot() {
+  if (!builtinVoice.isReady() || !configPortal.config().commentaryVoice) {
+    return;
+  }
+  speaking = true;
+  avatarFace.setExpression(m5avatar::Expression::Happy);
+  builtinVoice.speak(kBuiltinGreeting);
+  speaking = false;
+  avatarFace.returnToDefaultAfter(1500);
 }
 
 // 設定された「Text to speak」をTTSで読み上げる（Aボタン・頭タッチ用）。
@@ -1060,22 +1111,26 @@ void performComment(Comment comment) {
   }
 
   FaceHud& hud = avatarFace.hud();
-  // 夜間は High（完了・失敗・エラー・手動の依頼）だけ声に出し、ほかは字幕のみ
+  // 夜間は High（完了・失敗・エラー・手動の依頼）だけ声に出し、ほかは字幕のみ。
+  // 内蔵ボイスがあれば Wi-Fi やサーバーが無くても喋れる。
+  const bool canSpeak = builtinVoice.isReady() || configPortal.isConnected();
   const bool voice =
-      configPortal.config().commentaryVoice && configPortal.isConnected() &&
+      configPortal.config().commentaryVoice && canSpeak &&
       !(inQuietHours() && comment.priority != CommentPriority::High);
   uint32_t holdMs = captionDurationMs(comment.text);
   if (voice) {
     hud.setCaption(comment.text, 0);  // 喋り終わるまで出し続ける
     speaking = true;
-    const bool ok = playTts(ttsTextFor(comment.spoken()));
+    const bool ok = speakSentence(comment.spoken());
     speaking = false;
     holdMs = 2500;
     hud.setCaption(comment.text, holdMs);
     if (!ok) {
       avatarFace.showStatus("TTS ERROR", 2500);
       showStatusLed(96, 0, 0, 3000);
-      Serial.printf("TTS error: %s\n", ttsClient.lastError().c_str());
+      Serial.printf("TTS error: %s / builtin: %s\n",
+                    ttsClient.lastError().c_str(),
+                    builtinVoice.lastError().c_str());
     }
   } else {
     hud.setCaption(comment.text, holdMs);
@@ -1865,6 +1920,12 @@ void setup() {
   M5.Speaker.setVolume(255); // スピーカー音量（0〜255、最大）
   // TTS再生中のコールバックを登録する
   ttsClient.setCallbacks(setLipSyncLevel, serviceApp);
+  // 内蔵ボイス（LittleFS のボイスパック）。無くても動作は続ける
+  builtinVoice.setCallbacks(setLipSyncLevel, serviceApp);
+  if (!builtinVoice.begin()) {
+    Serial.printf("[voice] builtin voice unavailable: %s\n",
+                  builtinVoice.lastError().c_str());
+  }
 
   // Gateway 連携用のコールバックを登録する（configPortal.begin() の前に設定）。
   // /api/speak: 話し中・発話待ちなら busy。受け付けたら発話待ちフラグを立てる。
@@ -1943,6 +2004,7 @@ void setup() {
     avatarFace.resetToDefault();
     avatarFace.showStatus("SETUP: 192.168.4.1", 0); // 常時表示
     showStatusLed(48, 32, 0); // 橙色LED: セットアップ待ち
+    greetOnBoot();
     return; // ループに入る（APモードではメニューは使えない）
   }
 
@@ -1960,6 +2022,7 @@ void setup() {
   showStatusLed(0, 48, 0); // 緑色LED: 正常動作中
   startBodyMotion();
   Serial.println("Mode default: LOCAL LLM");
+  greetOnBoot();
 }
 
 // メインループ。約5ms間隔で繰り返し実行される。

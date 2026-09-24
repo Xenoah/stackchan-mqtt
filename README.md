@@ -11,16 +11,18 @@ M5Stack StackChan（K151 / CoreS3）が **Bambu Lab P1S の印刷をリアルタ
 ```mermaid
 flowchart LR
     P[Bambu Lab P1S] -->|MQTT over TLS :8883<br>push_status| S[StackChan CoreS3]
-    S -->|実況テキスト| T[TTS サーバー<br>VOICEVOX / Android Gateway]
-    T -->|WAV| S
+    S --> V[内蔵ボイス<br>本体フラッシュ]
+    S -.->|任意| T[TTS サーバー<br>VOICEVOX / Android Gateway]
     S --> F[顔 + HUD + 字幕]
     S --> L[LED 進捗リング]
     S --> W[Web ダッシュボード]
 ```
 
-> [!IMPORTANT]
-> StackChan・プリンター・TTS サーバーが同じ LAN にある必要があります。
-> 音声合成は StackChan 本体ではなく LAN 上の TTS サーバーで行います。
+> [!NOTE]
+> **内蔵ボイス**（VOICEVOX で作ったずんだもんの声を本体に焼き込んだもの）があれば、
+> PC やスマホの TTS サーバーなしで StackChan 単体で実況します。TTS サーバーを使う場合も、
+> サーバーにつながらないときは自動で内蔵ボイスに切り替わります。
+> StackChan とプリンターは同じ LAN にある必要があります。
 
 ## できること
 
@@ -83,8 +85,9 @@ HUD は m5avatar の顔スプライトの中に描いているため、顔のア
 - M5Stack StackChan K151（CoreS3）
 - Bambu Lab プリンター（P1S で想定。P1P / X1 / A1 系も同じ LAN MQTT を使います）
 - 2.4 GHz Wi-Fi
-- LAN 上の TTS サーバー（どちらか）
-  - Windows / macOS: [VOICEVOX](https://voicevox.hiroshiba.jp/) または AivisSpeech（推奨）
+- 内蔵ボイスを作るための [VOICEVOX](https://voicevox.hiroshiba.jp/)（PC で一度だけ使う）
+- （任意）常用する TTS サーバー
+  - Windows / macOS: VOICEVOX または AivisSpeech
   - Android: 同梱の [Termux Gateway](gateway/README.md)（`simple_wav`）
 - [PlatformIO](https://platformio.org/)（VS Code 拡張または CLI）
 
@@ -100,6 +103,27 @@ cd stackchan-mqtt
 
 ポートを指定する場合は `--upload-port COM4` を付けます。認識されないときは
 microSD スロット付近の RST ボタンを約3秒長押ししてダウンロードモードに入れます。
+
+### 1.5. 内蔵ボイスを書き込む（単体で喋らせる）
+
+VOICEVOX を起動した状態で、ボイスパックを作って本体のファイル領域へ書き込みます。
+
+```powershell
+python tools/make_voice_pack.py          # data/voice.pak を作る（初回 3〜5 分、2回目からはキャッシュで速い）
+& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -t uploadfs
+```
+
+- 実況のセリフ断片（ソースの文字列から自動抽出）・数字・「数字＋単位」の約 680 クリップを
+  ずんだもん（話者 3）で合成し、μ-law 12kHz で約 8.5MB にまとめます。
+- 本体は実況文をこのクリップへ最長一致で分解し、つなげて再生します（口パクつき）。
+- 実況の文面を変えたら、スクリプトを実行し直して `uploadfs` するだけで追従します。
+- 話者や話速は `--speaker` `--speed` で変えられます（例: `--speaker 1` でずんだもん あまあま）。
+- 生成した音声はリポジトリに含めていません（`data/voice.pak` は `.gitignore`）。
+  VOICEVOX とキャラクターの利用規約に従ってください（例: `VOICEVOX:ずんだもん`）。
+
+> [!IMPORTANT]
+> このバージョンからパーティション構成が変わりました（アプリ 3MB＋ファイル領域 12.8MB）。
+> NVS の位置は同じなので Wi-Fi 設定やキャリブレーションは残ります。
 
 資格情報はソースに書かず、すべて Web 設定画面から本体の NVS に保存します。
 
@@ -121,7 +145,8 @@ StackChan からは LAN 内の MQTT（ポート 8883、ユーザー名 `bblp`、
 
 1. 起動するとサーボ確認画面が出ます。触らなければ 10 秒後に自動で `NO`（サーボを動かさない）で進みます。
 2. Wi-Fi が未設定なら `StackChan-Setup-XXXXXX` のアクセスポイントが立ちます（パスワード `stackchan`）。
-3. スマホで接続し `http://192.168.4.1` を開き、Wi-Fi と TTS サーバーを設定して保存します。
+3. スマホで接続し `http://192.168.4.1` を開き、Wi-Fi を設定して保存します
+   （内蔵ボイスだけで使うなら TTS エンジンは「内蔵ボイス」を選びます）。
 
 ### 4. プリンターと実況を設定する
 
@@ -133,7 +158,7 @@ StackChan が Wi-Fi につながったら、`http://<StackChan の IP>/settings`
 | 🖨 Bambu Lab プリンター | 「監視して実況する」を ON、IP アドレス・シリアル番号・アクセスコード |
 | 🗣 実況 | 声の ON/OFF、進捗の実況間隔（しない / 5 / 10 / 20 / 25%）、無言時の状況報告（しない / 5〜60 分）、準備工程・温度到達の実況、夜間モード（既定 23時〜7時）、スピーカー音量 |
 | 🖥 表示 | 顔の HUD、LED 進捗表示、Gaming RGB、カメラ目線、タイムゾーン（既定 `JST-9`） |
-| 🔊 TTS | エンジン・ホスト・ポート・話者 ID（ずんだもん ノーマル = `3`） |
+| 🔊 TTS | エンジン（内蔵ボイス / VOICEVOX 互換 / simple_wav）・ホスト・ポート・話者 ID（ずんだもん ノーマル = `3`） |
 
 「保存して再起動」で反映されます。起動後、プリンターに接続すると
 「プリンターとつながったよ！」と話し、顔に HUD が表示されます。
@@ -142,8 +167,14 @@ StackChan が Wi-Fi につながったら、`http://<StackChan の IP>/settings`
 
 | エンジン | 実況の送り方 |
 |---|---|
+| `builtin`（内蔵ボイス） | 本体のボイスパックで喋ります。Wi-Fi やサーバーが無くても動きます |
 | `voicevox_compatible` | 実況テキストを `audio_query` → `synthesis` に渡して合成（ずんだもん等の声で喋ります） |
 | `simple_wav` | `POST /synthesis` の本文を `__SAY__<実況テキスト>` にして送ります。同梱 Gateway はこれを読み上げます |
+
+サーバー（`voicevox_compatible` / `simple_wav`）を選んでいても、接続に失敗したら同じ文を内蔵ボイスで
+言い直し、その後 3 分間はサーバーを試さずに内蔵ボイスで喋ります（接続待ちで固まらないように、
+サーバーへの接続タイムアウトは 4 秒）。内蔵ボイスは実況の文章をほぼすべて読めますが、
+ジョブ名は「作品」と読み替え、辞書にない自由な文章（英文など）は読めない部分を飛ばします。
 
 VOICEVOX Engine は LAN から届くよう `--host 0.0.0.0` で起動してください（例: `run.exe --host 0.0.0.0 --port 50021`）。
 Windows ファイアウォールはプライベートネットワークからのアクセスのみ許可してください。
@@ -237,7 +268,10 @@ Web の接続チップ、または `/status` とシリアルモニター（`[bam
 
 ### 喋らない・字幕だけ出る
 
-- 実況の声が OFF になっていないか（Web のボタン / メニュー「実況の声」）
+- 実況の声が OFF になっていないか（Web のボタン / メニュー「実況の声」 / 設定「実況を声で喋る」）
+- 夜間モードの時間帯ではないか（重要な実況以外は字幕だけになります）
+- 内蔵ボイスが書き込まれているか（`/status` の「内蔵ボイス」が「678 フレーズ」などになっているか。
+  「未書き込み」なら `python tools/make_voice_pack.py` → `pio run -t uploadfs`）
 - TTS サーバーが LAN から届くか（VOICEVOX は `http://<PCのIP>:50021/speakers` が開けるか）
 - `simple_wav` の場合は同梱 Gateway を最新にしてください（`__SAY__` 対応が必要です）
 - 失敗すると HUD に `TTS ERROR`、LED が赤になります。シリアルに `TTS error: ...` が出ます
