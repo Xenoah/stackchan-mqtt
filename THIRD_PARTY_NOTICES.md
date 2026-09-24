@@ -48,6 +48,29 @@ SOFTWARE.
 
 - [crankyoldgit/IRremoteESP8266](https://github.com/crankyoldgit/IRremoteESP8266)
 
+## PubSubClient
+
+- Project: [knolleary/pubsubclient](https://github.com/knolleary/pubsubclient)
+- Version: `^2.8`
+- License: MIT License
+
+Bambu Lab プリンターとの MQTT 通信に使用しています。
+
+## ArduinoJson
+
+- Project: [bblanchon/ArduinoJson](https://github.com/bblanchon/ArduinoJson)
+- Version: `^7.4.2`
+- License: MIT License
+
+プリンターの状態 JSON の解析と、Web API の JSON 生成に使用しています。
+
+## Bambu Lab LAN MQTT
+
+プリンターとの通信方式（トピック、`pushall`、`bblp` ユーザー）は
+[Xenoah/ESP32-bambu-MQTT](https://github.com/Xenoah/ESP32-bambu-MQTT) を踏襲しています。
+各フィールドの意味は OpenBambuAPI / ha-bambulab などコミュニティの調査を参考にしました。
+Bambu Lab は Bambu Lab 社の商標であり、本プロジェクトは同社とは関係ありません。
+
 ## VOICEVOX
 
 VOICEVOXおよびキャラクター音声は本リポジトリへ同梱していません。
