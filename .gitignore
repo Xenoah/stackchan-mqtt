@@ -1,0 +1,6 @@
+.pio
+.release/
+.vscode/
+docs/GITHUB_WORKFLOW.md
+__pycache__/
+*.pyc
