@@ -236,6 +236,13 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 | J2 | メニュー | 3列×2段＋閉じる。「設定」→ `runSettingsMenu()`（Wi-Fi / プリンター / 接続情報）。プリンター未設定で MQTT・プリンターを押すと見出しに案内（`showModeMenuHint`） | ✅ |
 | J3 | MQTT モードは UI 優先 | MQTT モードに入るとプリンター詳細画面（`showPrinterScreenIfFree` / `switchMenuToPrinterScreen`）。ほかのモードへ移ると `closePrinterScreen()` | ✅ |
 
+## Part K: 再起動の修正（2026-09-25 / v2.3.2）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| K1 | 顔の描画タスクのスタック | コアダンプ（DebugException、drawLoop の pxTopOfStack が pxStack+136）でスタックあふれを確認。`replaceDrawTask()` がライブラリの drawLoop（2KB）をフレーム間で止めて消し、8KB・優先度0の `faceDraw` を作って `m5avatar::drawTaskHandle` を差し替える | ✅ |
+| K2 | 監視 | `[heap] ... stack face= loop= mqtt=`（uxTaskGetStackHighWaterMark）。実機 30 分: 再起動なし、ヒープ一定、face の最大使用 約 2.7KB | ✅ |
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
@@ -256,3 +263,4 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 - 2026-09-25: 本体のタッチキーボードで Wi-Fi・MQTT を設定（Part H）。画面は PIL のモックで配置を確認。ビルド成功（Flash 53.6%）。v2.2.0 プレリリース。
 - 2026-09-25: 内蔵ボイスでどんな文章も読む（Part I）。ビルド成功（Flash 5.19MB / 5.75MB）。v2.3.0 プレリリース。
 - 2026-09-25: 実機に v2.3.0 を書き込み（free text on、自由な文章の読み上げを確認）。ユーザー報告の設定画面クラッシュ・画面のちらつき・メニューの重複を修正（Part J）。v2.3.1 プレリリース。
+- 2026-09-25: ユーザー報告「ときどき再起動」を実機で監視しながら調査。顔の描画タスクのスタックあふれを修正（Part K）。v2.3.2 プレリリース。

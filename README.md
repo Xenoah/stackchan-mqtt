@@ -8,7 +8,7 @@ M5Stack StackChan（K151 / CoreS3）が **Bambu Lab P1S の印刷をリアルタ
 - プリンタ通信: [Xenoah/ESP32-bambu-MQTT](https://github.com/Xenoah/ESP32-bambu-MQTT)
   の Bambu Lab LAN MQTT 実装を StackChan 向けに再構成
 
-**現在のリリース: [v2.3.1](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.3.1)（プレリリース）**
+**現在のリリース: [v2.3.2](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.3.2)（プレリリース）**
 
 ```mermaid
 flowchart LR
@@ -132,7 +132,7 @@ microSD スロット付近の RST ボタンを約3秒長押ししてダウンロ
 Wi-Fi 設定・キャリブレーションを保存している NVS も消えるので、初回セットアップからになります。
 
 ```powershell
-python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.3.1-full.bin
+python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.3.2-full.bin
 ```
 
 **アップデート（設定を残す）**: 4つのファイルをそれぞれのアドレスに書き込みます。NVS（0x9000〜）には触れません。
