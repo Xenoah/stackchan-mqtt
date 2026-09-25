@@ -18,6 +18,11 @@ bool runWifiSetup(M5Canvas& canvas, ConfigPortal& portal,
 bool runPrinterSetup(M5Canvas& canvas, ConfigPortal& portal,
                      const std::function<void()>& service);
 
+// 設定メニュー（Wi-Fi・プリンター・接続情報）。選んだ項目を返す
+enum class SettingsChoice { Close, Wifi, Printer, Info };
+SettingsChoice runSettingsMenu(M5Canvas& canvas, ConfigPortal& portal,
+                               const std::function<void()>& service);
+
 // 「保存しました。再起動します」などの1枚だけのお知らせ画面
 void drawSetupMessage(M5Canvas& canvas, const char* title, const String& line,
                       uint16_t color);

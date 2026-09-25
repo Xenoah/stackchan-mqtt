@@ -81,7 +81,9 @@ class AvatarFaceController {
   void setHudVisible(bool visible);
 
   // アバターの描画タスク（FreeRTOS）を一時停止する。
-  // メニュー表示などで画面を直接描画する前に呼ぶ。
+  // メニュー表示などで画面を直接描画する前に呼ぶ。描きかけのフレームは描き終えるのを
+  // 待ってから止める（LCD の SPI バスをつかんだまま止めないため）。
+  // 止めている間は表情の変更を保留し、resumeDrawing() でまとめて反映する。
   void pauseDrawing();
 
   // アバターの描画タスクを再開する
@@ -137,6 +139,7 @@ class AvatarFaceController {
 
   bool started_ = false;          // begin()が呼ばれたかどうか
   bool drawingPaused_ = false;    // 描画タスクが一時停止中かどうか
+  bool expressionPending_ = false; // 一時停止中に変えた表情（再開時に反映する）
   bool showcaseEnabled_ = false;  // ショーケースモードが有効かどうか
   bool blinkClosed_ = false;      // まばたき中（目を閉じている）かどうか
   bool gamingRgb_ = false;        // ゲーミングRGB（虹色循環）が有効かどうか

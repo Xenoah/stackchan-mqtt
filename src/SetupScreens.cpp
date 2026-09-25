@@ -603,3 +603,74 @@ bool runPrinterSetup(M5Canvas& canvas, ConfigPortal& portal,
     delay(8);
   }
 }
+
+SettingsChoice runSettingsMenu(M5Canvas& canvas, ConfigPortal& portal,
+                               const std::function<void()>& service) {
+  struct Item {
+    SettingsChoice choice;
+    const char* title;
+    uint16_t accent;
+  };
+  static const Item kItems[] = {
+      {SettingsChoice::Wifi, "Wi-Fi", kGreen},
+      {SettingsChoice::Printer, "プリンター（MQTT）", kYellow},
+      {SettingsChoice::Info, "接続情報・スマホで設定", kBlue},
+  };
+  std::vector<Button> buttons;
+  for (int i = 0; i < 3; ++i) {
+    buttons.push_back({8, static_cast<int16_t>(36 + i * 66), kScreenW - 16, 58, i});
+  }
+  buttons.push_back({kScreenW - 36, 3, 32, 24, kCloseId});
+
+  TouchTracker touch;
+  touch.begin();
+  bool dirty = true;
+  while (true) {
+    if (service) service();
+    bool changed = false;
+    const int released = touch.update(buttons, changed);
+    if (released == kCloseId) return SettingsChoice::Close;
+    if (released >= 0 && released < 3) return kItems[released].choice;
+    if (dirty || changed) {
+      const AppConfig& config = portal.config();
+      canvas.fillScreen(kBg);
+      drawHeader(canvas, "設定", String());
+      drawButton(canvas, buttons[3], "×", kRed, touch.pressed() == kCloseId);
+      for (int i = 0; i < 3; ++i) {
+        const Button& b = buttons[i];
+        const bool pressed = touch.pressed() == i;
+        const uint16_t fill = pressed ? kItems[i].accent : kCard;
+        canvas.fillRoundRect(b.x, b.y, b.w, b.h, 10, fill);
+        canvas.fillRoundRect(b.x, b.y + 12, 4, b.h - 24, 2, pressed ? kBg : kItems[i].accent);
+        canvas.setFont(&fonts::lgfxJapanGothicP_16);
+        canvas.setTextDatum(top_left);
+        canvas.setTextColor(pressed ? kBg : kText, fill);
+        canvas.drawString(kItems[i].title, b.x + 14, b.y + 9);
+        String note;
+        switch (kItems[i].choice) {
+          case SettingsChoice::Wifi:
+            note = portal.isConnected() ? "接続中: " + WiFi.SSID()
+                   : config.wifiSsid.isEmpty() ? String("未設定")
+                                               : "つながっていない: " + config.wifiSsid;
+            break;
+          case SettingsChoice::Printer:
+            note = config.bambuHost.isEmpty()
+                       ? String("未設定")
+                       : String(config.bambuEnabled ? "監視中: " : "監視OFF: ") + config.bambuHost;
+            break;
+          default:
+            note = portal.isConnected()
+                       ? "http://" + WiFi.localIP().toString() + "/settings"
+                       : String("設定用ホットスポットを立てる");
+            break;
+        }
+        canvas.setFont(&fonts::lgfxJapanGothicP_12);
+        canvas.setTextColor(pressed ? kBg : kSub, fill);
+        canvas.drawString(fitText(canvas, note, b.w - 28), b.x + 14, b.y + 34);
+      }
+      canvas.pushSprite(0, 0);
+      dirty = false;
+    }
+    delay(8);
+  }
+}

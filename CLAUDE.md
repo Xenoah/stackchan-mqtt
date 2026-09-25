@@ -228,6 +228,14 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 | I4 | 再生 | `BuiltinVoice::plan()`: 文ごとにクリップで全部読めれば従来どおり、読めなければ `planSpeech()`。モーラは 60 サンプル（5ms）重ねてつなぐ（`holdTail`/`join`）。ッ は 70ms の間、ー は前の母音の音 | ✅ |
 | I5 | 検証 | `tools/talk_test/run.py --eval`（VOICEVOX の kana と比較）: 一般文 147 文でモーラ誤り 1.66%、実況文 137 文で 0.75%、アクセント誤り約 3.5〜3.9%。PC で 0.2〜0.5ms/文。実機は未確認 | ✅ |
 
+## Part J: UI の優先（2026-09-25 / v2.3.1）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| J1 | クラッシュ修正 | コアダンプ（`esp_coredump info_corefile`、coredump パーティション 0xFF0000）で `drawKeyboard` → `pushSprite` → `spiEndTransaction` の assert を確認。原因は顔の描画タスクとの LCD 取り合い。`pauseDrawing()` は描画タスクが Blocked（フレーム間の vTaskDelay）になるのを待って `vTaskSuspend`（確認〜停止の間だけメインループの優先度を上げる）。`applyExpression()` は停止中は保留（`expressionPending_`）し `resumeDrawing()` で反映。描画タスクの優先度は 0 | ✅ |
+| J2 | メニュー | 3列×2段＋閉じる。「設定」→ `runSettingsMenu()`（Wi-Fi / プリンター / 接続情報）。プリンター未設定で MQTT・プリンターを押すと見出しに案内（`showModeMenuHint`） | ✅ |
+| J3 | MQTT モードは UI 優先 | MQTT モードに入るとプリンター詳細画面（`showPrinterScreenIfFree` / `switchMenuToPrinterScreen`）。ほかのモードへ移ると `closePrinterScreen()` | ✅ |
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
@@ -247,3 +255,4 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 - 2026-09-25: 印刷開始で MQTT モードへ自動切り替え（Part G）。ビルド成功（RAM 21.9%, Flash 52.6% / app 3MB）。v2.1.0 プレリリース。
 - 2026-09-25: 本体のタッチキーボードで Wi-Fi・MQTT を設定（Part H）。画面は PIL のモックで配置を確認。ビルド成功（Flash 53.6%）。v2.2.0 プレリリース。
 - 2026-09-25: 内蔵ボイスでどんな文章も読む（Part I）。ビルド成功（Flash 5.19MB / 5.75MB）。v2.3.0 プレリリース。
+- 2026-09-25: 実機に v2.3.0 を書き込み（free text on、自由な文章の読み上げを確認）。ユーザー報告の設定画面クラッシュ・画面のちらつき・メニューの重複を修正（Part J）。v2.3.1 プレリリース。

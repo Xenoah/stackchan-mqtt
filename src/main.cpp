@@ -70,6 +70,8 @@ volatile int8_t pendingModeRequest = -1; // Web からのモード切り替え�
 
 void updatePrinterMonitor(uint32_t now);
 void updatePrinterHud(const PrinterState& s);
+void closePrinterScreen();
+void showPrinterScreenIfFree();
 bool updatePrinterLed(uint32_t now);
 String ttsTextFor(const String& text);
 
@@ -254,9 +256,7 @@ enum class ModeMenuButton {
   Voice,     // 実況の声 ON/OFF
   LocalLlm,  // LOCAL LLMモードに切り替え
   LevelHold, // LEVEL HOLDモードに切り替え
-  Settings,  // 接続情報（URL・設定用ホットスポット）を開く
-  WifiSetup,    // 本体のキーボードで Wi-Fi を設定
-  PrinterSetup, // 本体のキーボードでプリンター（MQTT）を設定
+  Settings,  // 設定（Wi-Fi・プリンター・接続情報）を開く
   Close,     // メニューを閉じる
 };
 
@@ -406,6 +406,8 @@ int16_t displayTouchLastX = 0;      // スワイプ現在X座標
 int16_t displayTouchLastY = 0;      // スワイプ現在Y座標
 uint32_t displayTouchStartedAt = 0; // スワイプ開始時刻
 ModeMenuButton modeMenuPressed = ModeMenuButton::None; // 押下中のメニューボタン
+String modeMenuHint;                // メニューの見出しに少しだけ出すお知らせ
+uint32_t modeMenuHintUntil = 0;     // お知らせを消す時刻（0 = 出していない）
 
 // モード名の文字列を返す（ステータス表示用）
 const char* appModeName(AppMode mode) {
@@ -729,12 +731,14 @@ void activateMode(AppMode mode) {
   if (mode == AppMode::LevelHold) {
     // 校正が無いなどで始められなければ今のモードのまま
     if (startLevelHoldMode()) {
+      closePrinterScreen();
       updatePrinterHud(printerNow);  // HUD を消す
     }
     return;
   }
 
   stopLevelHoldMode();
+  if (mode != AppMode::Printer) closePrinterScreen();  // プリンター画面は MQTT モードのもの
   currentMode = mode;
   avatarFace.resetToDefault();
   updatePrinterHud(printerNow);  // MQTT モードの間だけ HUD を出す
@@ -1360,6 +1364,7 @@ void updateAutoPrinterMode(uint32_t now) {
       if (currentMode == AppMode::Printer) {
         printerModeAuto = true;
         modeBeforeAuto = previous;
+        showPrinterScreenIfFree();  // 顔よりプリンターの画面を優先して出す
         Serial.printf("[mode] print started: %s -> MQTT\n", appModeName(previous));
       }
     }
@@ -1431,28 +1436,37 @@ void handleTopTouch() {
   }
 }
 
-// メニューのタイル配置（3列×3行）。1段目がモード、2段目以降が機能。
-// 描画と当たり判定で共有する。
+// メニューのタイル配置（3列×2行＋下の「閉じる」）。1段目がモード、2段目が機能。
+// 設定（Wi-Fi・プリンター・接続情報）は「設定」の中にまとめる。描画と当たり判定で共有する。
 constexpr ModeMenuButton kMenuOrder[] = {
     ModeMenuButton::PrinterMode, ModeMenuButton::LocalLlm,
     ModeMenuButton::LevelHold,   ModeMenuButton::Printer,
     ModeMenuButton::Voice,       ModeMenuButton::Settings,
-    ModeMenuButton::WifiSetup,   ModeMenuButton::PrinterSetup,
     ModeMenuButton::Close,
 };
 constexpr int16_t kMenuColumns = 3;
-constexpr int16_t kMenuRows = 3;
+constexpr int16_t kMenuTileRows = 2;
 constexpr int16_t kMenuTop = 34;
 constexpr int16_t kMenuMargin = 8;
 constexpr int16_t kMenuGap = 6;
+constexpr int16_t kMenuCloseH = 40;
 
 bool modeMenuTileRect(size_t index, int16_t& x, int16_t& y, int16_t& w,
                       int16_t& h) {
-  if (index >= sizeof(kMenuOrder) / sizeof(kMenuOrder[0])) return false;
+  const size_t count = sizeof(kMenuOrder) / sizeof(kMenuOrder[0]);
+  if (index >= count) return false;
   const int16_t width = M5.Display.width();
   const int16_t height = M5.Display.height();
+  if (kMenuOrder[index] == ModeMenuButton::Close) {
+    x = kMenuMargin;
+    w = width - kMenuMargin * 2;
+    h = kMenuCloseH;
+    y = height - kMenuMargin - h;
+    return true;
+  }
+  const int16_t area = height - kMenuTop - kMenuMargin - kMenuCloseH - kMenuGap;
   w = (width - kMenuMargin * 2 - kMenuGap * (kMenuColumns - 1)) / kMenuColumns;
-  h = (height - kMenuTop - kMenuMargin - kMenuGap * (kMenuRows - 1)) / kMenuRows;
+  h = (area - kMenuGap * (kMenuTileRows - 1)) / kMenuTileRows;
   x = kMenuMargin + static_cast<int16_t>(index % kMenuColumns) * (w + kMenuGap);
   y = kMenuTop + static_cast<int16_t>(index / kMenuColumns) * (h + kMenuGap);
   return true;
@@ -1470,7 +1484,7 @@ ModeMenuButton modeMenuButtonAt(int16_t x, int16_t y) {
   return ModeMenuButton::None;
 }
 
-// モード選択メニューを描画する（3列×3行のタイル）。
+// モード選択メニューを描画する（3列×2行のタイル＋閉じる）。
 // 選択中のモードは黄色の枠、押下中のタイルはアクセント色で塗る。
 void drawModeMenu(ModeMenuButton pressed) {
   auto& display = startupCanvas();
@@ -1486,10 +1500,15 @@ void drawModeMenu(ModeMenuButton pressed) {
   display.setTextColor(TFT_WHITE, bg);
   display.drawString("メニュー", 10, 17);
   display.setTextDatum(middle_right);
-  display.setTextColor(sub, bg);
-  String modeNote = String("モード: ") + appModeName(currentMode);
-  if (printerModeAuto) modeNote += "（自動）";
-  display.drawString(modeNote, width - 10, 17);
+  if (modeMenuHintUntil != 0) {
+    display.setTextColor(TFT_YELLOW, bg);
+    display.drawString(modeMenuHint, width - 10, 17);
+  } else {
+    display.setTextColor(sub, bg);
+    String modeNote = String("モード: ") + appModeName(currentMode);
+    if (printerModeAuto) modeNote += "（自動）";
+    display.drawString(modeNote, width - 10, 17);
+  }
 
   const bool printerOn = bambu.isEnabled();
   const bool voiceOn = configPortal.config().commentaryVoice;
@@ -1531,21 +1550,9 @@ void drawModeMenu(ModeMenuButton pressed) {
         accent = display.color565(56, 189, 248);
         break;
       case ModeMenuButton::Settings:
-        title = "接続情報";
-        note = "URL・AP";
+        title = "設定";
+        note = "Wi-Fi・プリンター";
         accent = display.color565(192, 132, 252);
-        break;
-      case ModeMenuButton::WifiSetup:
-        title = "Wi-Fi";
-        note = configPortal.isConnected() ? WiFi.SSID() : String("未接続");
-        accent = display.color565(45, 212, 191);
-        break;
-      case ModeMenuButton::PrinterSetup:
-        title = "MQTT 設定";
-        note = configPortal.config().bambuHost.isEmpty()
-                   ? String("未設定")
-                   : configPortal.config().bambuHost;
-        accent = display.color565(251, 146, 60);
         break;
       default:
         title = "閉じる";
@@ -1571,13 +1578,18 @@ void drawModeMenu(ModeMenuButton pressed) {
       display.drawRoundRect(x, y, w, h, 9, TFT_YELLOW);
       display.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 8, TFT_YELLOW);
     }
-    display.setTextDatum(top_left);
     display.setFont(&fonts::lgfxJapanGothicP_16);
     display.setTextColor(textColor, fill);
-    display.drawString(title, x + 10, y + 11);
+    if (button == ModeMenuButton::Close) {
+      display.setTextDatum(middle_center);
+      display.drawString(title, x + w / 2, y + h / 2 + 1);
+      continue;
+    }
+    display.setTextDatum(top_left);
+    display.drawString(title, x + 10, y + 14);
     display.setFont(&fonts::lgfxJapanGothicP_12);
     display.setTextColor(isPressed ? bg : sub, fill);
-    display.drawString(setupui::fitText(display, note, w - 14), x + 10, y + 36);
+    display.drawString(setupui::fitText(display, note, w - 14), x + 10, y + 42);
   }
   display.pushSprite(0, 0); // キャンバスを画面に転送（フリッカーフリー）
 }
@@ -1664,16 +1676,6 @@ void drawSettingsInfo() {
   display.pushSprite(0, 0);
 }
 
-// SETTINGS情報画面を開く。
-// APを起動してから画面を表示する（APの起動完了を待たずにUIを先に出す）。
-void openSettingsInfo() {
-  settingsInfoOpen = true;
-  configPortal.startSettingsAp(); // WIFI_AP_STAモードでAPを追加起動
-  avatarFace.pauseDrawing();
-  delay(20);
-  drawSettingsInfo();
-}
-
 // SETTINGS情報画面を閉じる。APを停止してアバターを再開する。
 void closeSettingsInfo() {
   configPortal.stopSettingsAp(); // APを停止してSTAモードに戻す
@@ -1741,6 +1743,67 @@ void handleSetupPortalTouch() {
   displayWasTouching = touching;
 }
 
+// 顔の代わりにプリンター詳細画面を出す（メニュー・設定画面を開いていなければ）
+void showPrinterScreenIfFree() {
+  if (!bambu.isEnabled() || modeMenuOpen || settingsInfoOpen || deviceSetupOpen) return;
+  openPrinterScreen();
+}
+
+// メニューから顔に戻さずにプリンター詳細画面へ切り替える
+// （再開直後の一時停止で描画タスクをフレーム途中で止めないため）
+void switchMenuToPrinterScreen() {
+  modeMenuOpen = false;
+  modeMenuPressed = ModeMenuButton::None;
+  printerScreenOpen = true;
+  drawPrinterScreenNow();
+}
+
+// 設定（Wi-Fi・プリンター・接続情報）。メニューから顔の描画を止めたまま開く
+void openSettingsMenu() {
+  const bool fromMenu = modeMenuOpen;
+  modeMenuOpen = false;
+  modeMenuPressed = ModeMenuButton::None;
+  deviceSetupOpen = true;
+  if (!fromMenu) {
+    avatarFace.pauseDrawing();
+  }
+  while (true) {
+    const SettingsChoice choice = runSettingsMenu(startupCanvas(), configPortal, serviceApp);
+    bool saved = false;
+    if (choice == SettingsChoice::Wifi) {
+      saved = runWifiSetup(startupCanvas(), configPortal, serviceApp);
+    } else if (choice == SettingsChoice::Printer) {
+      saved = runPrinterSetup(startupCanvas(), configPortal, serviceApp);
+    } else if (choice == SettingsChoice::Info) {
+      // 接続情報は今までどおり（タップで閉じる・設定用ホットスポットを立てる）
+      deviceSetupOpen = false;
+      settingsInfoOpen = true;
+      configPortal.startSettingsAp();
+      drawSettingsInfo();
+      displayWasTouching = false;
+      return;
+    } else {
+      break;  // 閉じる
+    }
+    if (saved) {
+      Serial.println("[setup] saved on device, restarting");
+      delay(300);
+      ESP.restart();
+    }
+  }
+  deviceSetupOpen = false;
+  displayWasTouching = false;
+  avatarFace.resumeDrawing();
+  avatarFace.resetToDefault();
+}
+
+// メニューの見出しにお知らせを少し出す（メニューは開いたまま）
+void showModeMenuHint(const char* text) {
+  modeMenuHint = text;
+  modeMenuHintUntil = millis() + 3000;
+  drawModeMenu(ModeMenuButton::None);
+}
+
 // メニューを開く。アバターの描画を一時停止して画面を上書きする。
 void openModeMenu() {
   if (modeMenuOpen) {
@@ -1792,6 +1855,11 @@ bool handleDisplayTouch() {
 
   // モードメニューが開いている: ボタンのハイライトと選択処理
   if (modeMenuOpen) {
+    if (modeMenuHintUntil != 0 &&
+        static_cast<int32_t>(millis() - modeMenuHintUntil) >= 0) {
+      modeMenuHintUntil = 0;
+      drawModeMenu(modeMenuPressed);
+    }
     const ModeMenuButton current =
         touching ? modeMenuButtonAt(x, y) : ModeMenuButton::None;
     // ボタンが変わったら再描画してハイライト更新
@@ -1801,29 +1869,36 @@ bool handleDisplayTouch() {
     }
     if (!touching && displayWasTouching) {
       const ModeMenuButton selected = modeMenuPressed;
-      // 本体の設定画面へ（プリンター未設定でプリンター系を押したときもこちら）
-      const bool printerSetup =
-          selected == ModeMenuButton::PrinterSetup ||
-          (!bambu.isEnabled() && (selected == ModeMenuButton::Printer ||
-                                  selected == ModeMenuButton::PrinterMode));
-      if (selected == ModeMenuButton::WifiSetup || printerSetup) {
-        openDeviceSetup(printerSetup ? runPrinterSetup : runWifiSetup);
+      modeMenuPressed = ModeMenuButton::None;
+      // プリンターが未設定のときは、設定の場所を案内するだけ（同じ設定画面を何か所からも開かない）
+      if (!bambu.isEnabled() && (selected == ModeMenuButton::Printer ||
+                                 selected == ModeMenuButton::PrinterMode)) {
+        showModeMenuHint("設定 → プリンターで登録してね");
+        displayWasTouching = touching;
         return true;
       }
-      if (selected == ModeMenuButton::Printer && bambu.isEnabled()) {
-        // 顔の描画を再開せずにメニューから詳細画面へ直接切り替える
-        // （再開直後の一時停止で描画タスクをフレーム途中で止めないため）
-        modeMenuOpen = false;
-        modeMenuPressed = ModeMenuButton::None;
-        printerScreenOpen = true;
-        drawPrinterScreenNow();
+      if (selected == ModeMenuButton::Settings) {
+        openSettingsMenu();
+        return true;
+      }
+      if (selected == ModeMenuButton::Printer) {
+        switchMenuToPrinterScreen();
+        displayWasTouching = touching;
+        return true;
+      }
+      if (selected == ModeMenuButton::PrinterMode) {
+        // MQTT モードはプリンターの画面で始める（顔を再開せずに切り替える）
+        selectModeManually(AppMode::Printer);
+        switchMenuToPrinterScreen();
+        displayWasTouching = touching;
+        return true;
+      }
+      if (selected == ModeMenuButton::None) {
         displayWasTouching = touching;
         return true;
       }
       closeModeMenu(); // メニューを閉じてからモードを切り替える
-      if (selected == ModeMenuButton::PrinterMode) {
-        selectModeManually(AppMode::Printer);
-      } else if (selected == ModeMenuButton::Voice) {
+      if (selected == ModeMenuButton::Voice) {
         const bool voice = !configPortal.config().commentaryVoice;
         configPortal.setCommentaryVoice(voice);
         avatarFace.showStatus(voice ? "VOICE ON" : "VOICE OFF", 1800);
@@ -1832,8 +1907,6 @@ bool handleDisplayTouch() {
         selectModeManually(AppMode::LocalLlm);
       } else if (selected == ModeMenuButton::LevelHold) {
         selectModeManually(AppMode::LevelHold);
-      } else if (selected == ModeMenuButton::Settings) {
-        openSettingsInfo(); // SETTINGS情報画面を開く
       }
     }
     displayWasTouching = touching;
@@ -2268,6 +2341,7 @@ void loop() {
     pendingModeRequest = -1;
     if (requested != AppMode::Printer || bambu.isEnabled()) {
       selectModeManually(requested);
+      if (requested == AppMode::Printer) showPrinterScreenIfFree();
     }
   }
   updateAutoPrinterMode(millis());
