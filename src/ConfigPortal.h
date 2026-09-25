@@ -32,6 +32,7 @@ struct AppConfig {
   String bambuHost;         // プリンタの IP アドレス
   String bambuSerial;       // シリアル番号
   String bambuAccessCode;   // LAN アクセスコード（画面には再表示しない）
+  bool autoPrinterMode = true;  // 印刷が始まったら自動で MQTT モードへ切り替える
 
   // --- 実況 ---
   bool commentaryVoice = true;       // 実況を喋る（OFF = 字幕と表情だけ）
@@ -58,6 +59,7 @@ struct PrinterWebApi {
   std::function<void(bool)> light;            // POST /api/printer/light
   std::function<bool(const String&)> say;     // POST /api/printer/say
   std::function<void(bool)> voice;            // POST /api/printer/voice
+  std::function<void(const String&)> mode;    // POST /api/mode（mqtt / llm / level）
 };
 
 // /statusページに表示するアプリ実行時の状態。

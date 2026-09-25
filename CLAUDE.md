@@ -199,6 +199,15 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 
 ---
 
+## Part G: MQTT モードへの自動切り替え（2026-09-25 / v2.1.0）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| G1 | MQTT モード | `AppMode::Printer`（表示名 `MQTT`）。HUD は MQTT モードの間だけ表示、頭タップは状況報告。LEVEL HOLD 以外は首のアイドル動作・喜びモーションを使う（`modeUsesBodyMotion()`） | ✅ |
+| G2 | 自動切り替え | `updateAutoPrinterMode()`（loop から、`speaking` 中は何もしない）。`synced` かつ `isActive()` で Online なら MQTT モードへ（`printerModeAuto`・`modeBeforeAuto` を記録）。進行中でなくなって `kAutoModeReturnMs`（5分）で元のモードへ。手動でモードを選ぶ（`selectModeManually()`）と自動の記録を消し、印刷中に MQTT から抜けたら `autoModeHeldOff` でそのジョブ中は入らない。設定 `autoPrinterMode`（NVS `auto_mqtt`） | ✅ |
+| G3 | 実況の出し分け | MQTT モード以外では Low の実況を `remember()` だけして喋らない | ✅ |
+| G4 | メニュー・Web | メニュー3列（1段目がモード、注記は `lgfxJapanGothicP_12`）。`POST /api/mode` は `pendingModeRequest` に積むだけで loop が切り替える。ダッシュボードにモード表示と切り替えボタン | ✅ |
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
@@ -215,3 +224,4 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 - 2026-09-24: stackchan-mqtt として分離。Bambu Lab P1S の LAN MQTT 監視と実況（Part E）を実装。
   ファーム build 成功（RAM 19.5%, Flash 22.8%）。Gateway `__SAY__` は TestClient で確認。
 - 2026-09-24: 内蔵ボイス（Part F）。VOICEVOX でボイスパックを作り LittleFS へ焼き、TTS サーバーなしで実況できるようにした。
+- 2026-09-25: 印刷開始で MQTT モードへ自動切り替え（Part G）。ビルド成功（RAM 21.9%, Flash 52.6% / app 3MB）。v2.1.0 プレリリース。

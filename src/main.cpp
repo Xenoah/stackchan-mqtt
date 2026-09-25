@@ -57,7 +57,17 @@ uint32_t printerScreenRevision = 0;
 constexpr uint32_t kCommentGapMs = 1500;                   // 実況と実況の間
 constexpr uint32_t kPhaseLedHoldMs = 5UL * 60UL * 1000UL;  // 完了/失敗の LED 表示時間
 
+// --- MQTT モード（プリンター実況）への自動切り替え ---
+// 印刷が始まったら MQTT モードへ移り、終わって5分たったら元のモードへ戻る。
+// 印刷中に手動で別のモードへ移ったら、そのジョブの間は自動で戻さない。
+bool printerModeAuto = false;            // 自動で MQTT モードに入った（終わったら元へ戻す）
+bool autoModeHeldOff = false;            // このジョブの間は自動で入らない
+uint32_t printerIdleSince = 0;           // 印刷が終わった（進行中でなくなった）時刻
+constexpr uint32_t kAutoModeReturnMs = kPhaseLedHoldMs;
+volatile int8_t pendingModeRequest = -1; // Web からのモード切り替え（AppMode の値、-1 = なし）
+
 void updatePrinterMonitor(uint32_t now);
+void updatePrinterHud(const PrinterState& s);
 bool updatePrinterLed(uint32_t now);
 String ttsTextFor(const String& text);
 
@@ -231,11 +241,13 @@ enum class ServoPromptButton {
 enum class AppMode {
   LocalLlm,  // 通常モード: TTSサーバと通信して音声合成
   LevelHold, // 水平維持モード: IMUでサーボを安定化
+  Printer,   // MQTT モード: プリンター実況（顔に HUD、頭タップで状況報告）
 };
 
 // 下スワイプメニューのボタン
 enum class ModeMenuButton {
   None,
+  PrinterMode, // MQTT モード（プリンター実況）に切り替え
   Printer,   // プリンタ詳細画面を開く
   Voice,     // 実況の声 ON/OFF
   LocalLlm,  // LOCAL LLMモードに切り替え
@@ -333,6 +345,7 @@ constexpr float LEVEL_HOLD_ACCEL_MIN_NORM = 0.05f;       // 有効な加速度�
 
 // アプリの状態変数
 AppMode currentMode = AppMode::LocalLlm; // 現在の動作モード
+AppMode modeBeforeAuto = AppMode::LocalLlm; // 自動で MQTT モードに入る前のモード
 bool levelHoldActive = false;            // LEVEL HOLDが有効かどうか
 uint32_t levelHoldLastUpdateAt = 0;      // 最後にPIDを更新した時刻
 
@@ -391,7 +404,25 @@ ModeMenuButton modeMenuPressed = ModeMenuButton::None; // 押下中のメニュ�
 
 // モード名の文字列を返す（ステータス表示用）
 const char* appModeName(AppMode mode) {
-  return mode == AppMode::LevelHold ? "LEVEL HOLD" : "LOCAL LLM";
+  switch (mode) {
+    case AppMode::LevelHold: return "LEVEL HOLD";
+    case AppMode::Printer:   return "MQTT";
+    default:                 return "LOCAL LLM";
+  }
+}
+
+// Web API 用のモード名（/api/mode・/api/printer）
+const char* appModeKey(AppMode mode) {
+  switch (mode) {
+    case AppMode::LevelHold: return "level";
+    case AppMode::Printer:   return "mqtt";
+    default:                 return "llm";
+  }
+}
+
+// 首のアイドル動作・喜びモーションを使うモード（LEVEL HOLD はサーボを水平維持に使う）
+bool modeUsesBodyMotion() {
+  return currentMode == AppMode::LocalLlm || currentMode == AppMode::Printer;
 }
 
 // LEVEL HOLDモードのPIDとフィルタ状態をリセットする
@@ -426,7 +457,7 @@ int bodyHomePitch() {
 
 bool bodyMotionCanUseServo() {
   return calibrationController.data().servoValid &&
-         currentMode == AppMode::LocalLlm &&
+         modeUsesBodyMotion() &&
          !levelHoldActive &&
          !configPortal.isPortalActive() &&
          !modeMenuOpen &&
@@ -453,7 +484,7 @@ void stopBodyMotion(bool releaseServos) {
 
 bool startBodyMotion(bool ignoreAutoStartSkip = false) {
   if (!calibrationController.data().servoValid ||
-      currentMode != AppMode::LocalLlm ||
+      !modeUsesBodyMotion() ||
       levelHoldActive ||
       (!ignoreAutoStartSkip && bodyMotionSkipAutoStart)) {
     return false;
@@ -542,10 +573,10 @@ void updateGamingLed(uint32_t now) {
   M5StackChan.showRgbColor(r, g, b);
 }
 
-// 首を左右に振る喜びモーションを始める（サーボ校正済み・LOCAL LLM モード時のみ）
+// 首を左右に振る喜びモーションを始める（サーボ校正済み・LEVEL HOLD 以外のとき）
 void startJoyMotion() {
   if (!calibrationController.data().servoValid ||
-      currentMode != AppMode::LocalLlm ||
+      !modeUsesBodyMotion() ||
       levelHoldActive) {
     return;
   }
@@ -690,19 +721,26 @@ void stopLevelHoldMode() {
 // 指定モードに切り替える
 void activateMode(AppMode mode) {
   if (mode == AppMode::LevelHold) {
-    if (!startLevelHoldMode()) {
-      currentMode = AppMode::LocalLlm; // 失敗した場合はLOCAL LLMに戻す
+    // 校正が無いなどで始められなければ今のモードのまま
+    if (startLevelHoldMode()) {
+      updatePrinterHud(printerNow);  // HUD を消す
     }
     return;
   }
 
   stopLevelHoldMode();
-  currentMode = AppMode::LocalLlm;
+  currentMode = mode;
   avatarFace.resetToDefault();
-  avatarFace.showStatus("LOCAL LLM", 1800);
-  showStatusLed(0, 48, 0); // 緑色LED: 通常動作
+  updatePrinterHud(printerNow);  // MQTT モードの間だけ HUD を出す
+  if (mode == AppMode::Printer) {
+    avatarFace.showStatus("MQTT MODE", 1800);
+    showStatusLed(0, 36, 72); // 水色LED: プリンター実況
+  } else {
+    avatarFace.showStatus("LOCAL LLM", 1800);
+    showStatusLed(0, 48, 0); // 緑色LED: 通常動作
+  }
   startBodyMotion();
-  Serial.println("Mode changed: LOCAL LLM");
+  Serial.printf("Mode changed: %s\n", appModeName(mode));
 }
 
 // LEVEL HOLDモードのPID制御メインループ。80ms間隔で実行する。
@@ -1154,7 +1192,8 @@ void reportPrinterStatus() {
 
 // HUD の表示内容をプリンタ状態から作る
 void updatePrinterHud(const PrinterState& s) {
-  const bool visible = configPortal.config().printerHud && bambu.isEnabled();
+  const bool visible = configPortal.config().printerHud && bambu.isEnabled() &&
+                       currentMode == AppMode::Printer;
   avatarFace.setHudVisible(visible);
   if (!visible) {
     return;
@@ -1281,9 +1320,60 @@ bool updatePrinterLed(uint32_t now) {
   return true;
 }
 
-// 頭タップ: プリンタ監視中は状況報告、そうでなければ設定テキストを話す
+// 手動でモードを選んだとき（メニュー・Web）。自動切り替えの記録を消し、
+// 印刷中に MQTT モードから抜けたならこのジョブの間は自動で戻さない。
+void selectModeManually(AppMode mode) {
+  printerModeAuto = false;
+  if (mode != AppMode::Printer && printerNow.isActive()) {
+    autoModeHeldOff = true;
+  }
+  activateMode(mode);
+}
+
+// 印刷が始まったら MQTT モードへ、終わって5分たったら元のモードへ戻す（loop から）。
+// 実況や TTS の途中（serviceApp の中）では切り替えない。
+void updateAutoPrinterMode(uint32_t now) {
+  if (!bambu.isEnabled() || speaking) return;
+  const PrinterState& s = printerNow;
+  if (!s.synced) return;
+
+  // 進行中かどうかは最後に受け取った状態で判断する（接続が切れても印刷中なら留まる）
+  if (s.isActive()) {
+    printerIdleSince = 0;
+    if (currentMode != AppMode::Printer && s.link == LinkState::Online &&
+        configPortal.config().autoPrinterMode && !autoModeHeldOff) {
+      const AppMode previous = currentMode;
+      activateMode(AppMode::Printer);
+      if (currentMode == AppMode::Printer) {
+        printerModeAuto = true;
+        modeBeforeAuto = previous;
+        Serial.printf("[mode] print started: %s -> MQTT\n", appModeName(previous));
+      }
+    }
+    return;
+  }
+
+  if (s.link == LinkState::Online) {
+    autoModeHeldOff = false;  // ジョブが終わったので次の印刷ではまた自動で入る
+  }
+  if (!printerModeAuto) return;
+  if (currentMode != AppMode::Printer) {
+    printerModeAuto = false;
+    return;
+  }
+  if (printerIdleSince == 0) {
+    printerIdleSince = now == 0 ? 1 : now;
+    return;
+  }
+  if (now - printerIdleSince < kAutoModeReturnMs) return;
+  printerModeAuto = false;
+  Serial.printf("[mode] print over: MQTT -> %s\n", appModeName(modeBeforeAuto));
+  activateMode(modeBeforeAuto);
+}
+
+// 頭タップ: MQTT モードなら状況報告、そうでなければ設定テキストを話す
 void onHeadTap() {
-  if (bambu.isEnabled()) {
+  if (bambu.isEnabled() && currentMode == AppMode::Printer) {
     reportPrinterStatus();
   } else {
     speakConfiguredText();
@@ -1328,25 +1418,29 @@ void handleTopTouch() {
   }
 }
 
-// メニューのタイル配置（2列×3行）。描画と当たり判定で共有する。
+// メニューのタイル配置（3列×3行）。1段目がモード、2段目以降が機能。
+// 描画と当たり判定で共有する。
 constexpr ModeMenuButton kMenuOrder[] = {
-    ModeMenuButton::Printer,  ModeMenuButton::Voice,
-    ModeMenuButton::LocalLlm, ModeMenuButton::LevelHold,
-    ModeMenuButton::Settings, ModeMenuButton::Close,
+    ModeMenuButton::PrinterMode, ModeMenuButton::LocalLlm,
+    ModeMenuButton::LevelHold,   ModeMenuButton::Printer,
+    ModeMenuButton::Voice,       ModeMenuButton::Settings,
+    ModeMenuButton::Close,
 };
-constexpr int16_t kMenuTop = 40;
-constexpr int16_t kMenuMargin = 10;
-constexpr int16_t kMenuGap = 8;
-constexpr int16_t kMenuTileH = 60;
+constexpr int16_t kMenuColumns = 3;
+constexpr int16_t kMenuRows = 3;
+constexpr int16_t kMenuTop = 34;
+constexpr int16_t kMenuMargin = 8;
+constexpr int16_t kMenuGap = 6;
 
 bool modeMenuTileRect(size_t index, int16_t& x, int16_t& y, int16_t& w,
                       int16_t& h) {
   if (index >= sizeof(kMenuOrder) / sizeof(kMenuOrder[0])) return false;
   const int16_t width = M5.Display.width();
-  w = (width - kMenuMargin * 2 - kMenuGap) / 2;
-  h = kMenuTileH;
-  x = kMenuMargin + static_cast<int16_t>(index % 2) * (w + kMenuGap);
-  y = kMenuTop + static_cast<int16_t>(index / 2) * (h + kMenuGap);
+  const int16_t height = M5.Display.height();
+  w = (width - kMenuMargin * 2 - kMenuGap * (kMenuColumns - 1)) / kMenuColumns;
+  h = (height - kMenuTop - kMenuMargin - kMenuGap * (kMenuRows - 1)) / kMenuRows;
+  x = kMenuMargin + static_cast<int16_t>(index % kMenuColumns) * (w + kMenuGap);
+  y = kMenuTop + static_cast<int16_t>(index / kMenuColumns) * (h + kMenuGap);
   return true;
 }
 
@@ -1362,7 +1456,7 @@ ModeMenuButton modeMenuButtonAt(int16_t x, int16_t y) {
   return ModeMenuButton::None;
 }
 
-// モード選択メニューを描画する（2列×3行のタイル）。
+// モード選択メニューを描画する（3列×3行のタイル）。
 // 選択中のモードは黄色の枠、押下中のタイルはアクセント色で塗る。
 void drawModeMenu(ModeMenuButton pressed) {
   auto& display = startupCanvas();
@@ -1376,10 +1470,12 @@ void drawModeMenu(ModeMenuButton pressed) {
   display.setFont(&fonts::lgfxJapanGothicP_16);
   display.setTextDatum(middle_left);
   display.setTextColor(TFT_WHITE, bg);
-  display.drawString("メニュー", 12, 20);
+  display.drawString("メニュー", 10, 17);
   display.setTextDatum(middle_right);
   display.setTextColor(sub, bg);
-  display.drawString(appModeName(currentMode), width - 12, 20);
+  String modeNote = String("モード: ") + appModeName(currentMode);
+  if (printerModeAuto) modeNote += "（自動）";
+  display.drawString(modeNote, width - 10, 17);
 
   const bool printerOn = bambu.isEnabled();
   const bool voiceOn = configPortal.config().commentaryVoice;
@@ -1392,6 +1488,13 @@ void drawModeMenu(ModeMenuButton pressed) {
     String note;
     uint16_t accent = sub;
     switch (button) {
+      case ModeMenuButton::PrinterMode:
+        title = "MQTT";
+        note = !printerOn ? "未設定"
+               : configPortal.config().autoPrinterMode ? "印刷で自動"
+                                                       : "プリンター実況";
+        accent = display.color565(250, 204, 21);
+        break;
       case ModeMenuButton::Printer:
         title = "プリンター";
         note = printerOn ? String(printPhaseLabelJa(printerNow.phase))
@@ -1400,7 +1503,7 @@ void drawModeMenu(ModeMenuButton pressed) {
         break;
       case ModeMenuButton::Voice:
         title = "実況の声";
-        note = voiceOn ? "ON" : "OFF（字幕のみ）";
+        note = voiceOn ? "ON" : "OFF・字幕のみ";
         accent = display.color565(96, 165, 250);
         break;
       case ModeMenuButton::LocalLlm:
@@ -1426,6 +1529,8 @@ void drawModeMenu(ModeMenuButton pressed) {
     }
 
     const bool selected =
+        (button == ModeMenuButton::PrinterMode &&
+         currentMode == AppMode::Printer) ||
         (button == ModeMenuButton::LocalLlm &&
          currentMode == AppMode::LocalLlm) ||
         (button == ModeMenuButton::LevelHold &&
@@ -1434,17 +1539,19 @@ void drawModeMenu(ModeMenuButton pressed) {
     const uint16_t fill = isPressed ? accent : card;
     const uint16_t textColor = isPressed ? bg : TFT_WHITE;
 
-    display.fillRoundRect(x, y, w, h, 10, fill);
+    display.fillRoundRect(x, y, w, h, 9, fill);
     display.fillRoundRect(x, y + 10, 4, h - 20, 2, isPressed ? bg : accent);
     if (selected) {
-      display.drawRoundRect(x, y, w, h, 10, TFT_YELLOW);
-      display.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 9, TFT_YELLOW);
+      display.drawRoundRect(x, y, w, h, 9, TFT_YELLOW);
+      display.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 8, TFT_YELLOW);
     }
     display.setTextDatum(top_left);
+    display.setFont(&fonts::lgfxJapanGothicP_16);
     display.setTextColor(textColor, fill);
-    display.drawString(title, x + 14, y + 10);
+    display.drawString(title, x + 10, y + 11);
+    display.setFont(&fonts::lgfxJapanGothicP_12);
     display.setTextColor(isPressed ? bg : sub, fill);
-    display.drawString(note, x + 14, y + 33);
+    display.drawString(note, x + 10, y + 36);
   }
   display.pushSprite(0, 0); // キャンバスを画面に転送（フリッカーフリー）
 }
@@ -1620,17 +1727,20 @@ bool handleDisplayTouch() {
         return true;
       }
       closeModeMenu(); // メニューを閉じてからモードを切り替える
-      if (selected == ModeMenuButton::Printer) {
+      if (selected == ModeMenuButton::Printer ||
+          (selected == ModeMenuButton::PrinterMode && !bambu.isEnabled())) {
         avatarFace.showStatus("PRINTER: SETUP ON WEB", 2500);
+      } else if (selected == ModeMenuButton::PrinterMode) {
+        selectModeManually(AppMode::Printer);
       } else if (selected == ModeMenuButton::Voice) {
         const bool voice = !configPortal.config().commentaryVoice;
         configPortal.setCommentaryVoice(voice);
         avatarFace.showStatus(voice ? "VOICE ON" : "VOICE OFF", 1800);
         showStatusLed(voice ? 0 : 48, voice ? 64 : 24, voice ? 24 : 0);
       } else if (selected == ModeMenuButton::LocalLlm) {
-        activateMode(AppMode::LocalLlm);
+        selectModeManually(AppMode::LocalLlm);
       } else if (selected == ModeMenuButton::LevelHold) {
-        activateMode(AppMode::LevelHold);
+        selectModeManually(AppMode::LevelHold);
       } else if (selected == ModeMenuButton::Settings) {
         openSettingsInfo(); // SETTINGS情報画面を開く
       }
@@ -1948,7 +2058,9 @@ void setup() {
   PrinterWebApi printerApi;
   printerApi.stateJson = []() {
     return printerStateJson(bambu.snapshot(), commentator, bambu.isEnabled(),
-                            configPortal.config().commentaryVoice);
+                            configPortal.config().commentaryVoice,
+                            appModeKey(currentMode),
+                            configPortal.config().autoPrinterMode);
   };
   printerApi.report = []() {
     Comment c = commentator.statusReport(bambu.snapshot());
@@ -1966,6 +2078,13 @@ void setup() {
     return true;
   };
   printerApi.voice = [](bool on) { configPortal.setCommentaryVoice(on); };
+  // モード切り替えはサーボを動かすので、ここでは受け付けるだけにして loop() で行う
+  printerApi.mode = [](const String& mode) {
+    pendingModeRequest = static_cast<int8_t>(
+        mode == "mqtt"    ? AppMode::Printer
+        : mode == "level" ? AppMode::LevelHold
+                          : AppMode::LocalLlm);
+  };
   configPortal.setPrinterApi(printerApi);
 
   Serial.println("Starting network configuration...");
@@ -2019,9 +2138,10 @@ void setup() {
                 configPortal.config().ttsSpeaker.c_str());
 
   avatarFace.resetToDefault();
-  avatarFace.showStatus(bambu.isEnabled() ? "PRINTER MONITOR" : "LOCAL LLM");
+  avatarFace.showStatus("LOCAL LLM");
   showStatusLed(0, 48, 0); // 緑色LED: 正常動作中
   startBodyMotion();
+  // 印刷中なら、状態が届いたところで updateAutoPrinterMode() が MQTT モードへ移す
   Serial.println("Mode default: LOCAL LLM");
   greetOnBoot();
 }
@@ -2046,6 +2166,16 @@ void loop() {
   // 本体のプリンタ詳細画面を開いていれば描き直す
   refreshPrinterScreen();
 
+  // Web からのモード切り替え・印刷開始/終了による MQTT モードの自動切り替え
+  if (pendingModeRequest >= 0 && !speaking) {
+    const AppMode requested = static_cast<AppMode>(pendingModeRequest);
+    pendingModeRequest = -1;
+    if (requested != AppMode::Printer || bambu.isEnabled()) {
+      selectModeManually(requested);
+    }
+  }
+  updateAutoPrinterMode(millis());
+
   // Gateway からの /api/speak 発話待ちを処理する（ブラウザ送信→自動発話）。
   // WebServer ハンドラ内ではフラグを立てるだけで、実際の再生はここで行う。
   if (pendingApiSpeak && !speaking) {
@@ -2062,10 +2192,19 @@ void loop() {
 
   // プリンタ実況: 待ち行列のコメントを順番に演出付きで喋る。
   // High（完了・エラー等）は字幕だけの表示待ちを飛ばしてすぐ出す。
+  // MQTT モード以外では細かい実況（Low: 工程・温度・定期報告など）は喋らず、
+  // Web の実況ログにだけ残す。
   if (!speaking && commentator.hasComment() &&
       (static_cast<int32_t>(millis() - commentBusyUntil) >= 0 ||
        commentator.peekPriority() == CommentPriority::High)) {
-    performComment(commentator.popComment());
+    Comment comment = commentator.popComment();
+    if (currentMode != AppMode::Printer &&
+        comment.priority == CommentPriority::Low) {
+      comment.createdAt = millis();
+      commentator.remember(comment);
+    } else {
+      performComment(comment);
+    }
     delay(5);
     return;
   }

@@ -87,7 +87,7 @@ static const char kDashboardHtml[] PROGMEM = R"HTML(<!doctype html><html lang="j
 .empty{color:var(--sub);text-align:center;padding:10px 0}
 @media(max-width:480px){.hero{flex-direction:column;align-items:stretch}.ring{margin:0 auto}}
 </style></head><body>
-<header><div class="bar"><span class="brand">StackChan × Bambu</span><span id="link" class="chip"><i></i>…</span>
+<header><div class="bar"><span class="brand">StackChan × Bambu</span><span id="link" class="chip"><i></i>…</span><span id="mode" class="chip" hidden></span>
 <nav><a class="on" href="/">プリンター</a><a href="/settings">設定</a><a href="/status">状態</a></nav></div></header>
 <main>
 <section class="card" id="off" hidden><h3>プリンター未設定</h3>
@@ -109,7 +109,7 @@ static const char kDashboardHtml[] PROGMEM = R"HTML(<!doctype html><html lang="j
 <section class="card" id="amsCard" hidden><h3>AMS</h3><div class="trays" id="trays"></div></section>
 <section class="card" id="hmsCard" hidden><h3>お知らせ（HMS）</h3><ul class="hms" id="hms"></ul><p class="hint">コードは Bambu Lab Wiki の HMS 一覧で検索できます。</p></section>
 <section class="card"><h3>スタックチャンの実況</h3>
-<div class="actions"><button id="bReport">🗣 今の状況を話して</button><button id="bVoice" class="ghost">実況 --</button><button id="bLight" class="ghost">💡 ライト</button><button id="bRefresh" class="ghost">↻ 再取得</button></div>
+<div class="actions"><button id="bReport">🗣 今の状況を話して</button><button id="bMode" class="ghost" hidden>モード --</button><button id="bVoice" class="ghost">実況 --</button><button id="bLight" class="ghost">💡 ライト</button><button id="bRefresh" class="ghost">↻ 再取得</button></div>
 <div class="say"><input id="sayText" maxlength="120" placeholder="スタックチャンに言わせる（テスト）"><button id="bSay" class="ghost">話す</button></div>
 <ul class="log" id="log"></ul></section>
 </main>
@@ -123,6 +123,7 @@ const rem=m=>m==null||m<0?'--':(m>=60?Math.floor(m/60)+'時間'+(m%60)+'分':m+'
 const t=v=>v==null?'--':Math.round(v)+'℃';
 const ago=s=>s<60?s+'秒前':s<3600?Math.floor(s/60)+'分前':Math.floor(s/3600)+'時間前';
 const LINK={online:['接続中','ok'],connecting:['接続試行中','warn'],waiting_wifi:['Wi-Fi待ち','warn'],error:['接続エラー','err'],disabled:['未設定','']};
+const MODE={mqtt:'MQTT モード',llm:'LOCAL LLM',level:'LEVEL HOLD'};
 const PC={RUNNING:'#4ade80',PREPARE:'#60a5fa',SLICING:'#60a5fa',PAUSE:'#fbbf24',FINISH:'#c084fc',FAILED:'#f87171'};
 function render(d){
  st=d;const l=LINK[d.link]||['?',''];const lk=$('link');
@@ -147,6 +148,8 @@ function render(d){
   h+='<div class="tray'+(on?' on':'')+'"><div class="sw" style="background:'+(tr.present?tr.color:'repeating-linear-gradient(45deg,#222 0 6px,#2c2c2c 6px 12px)')+'"></div><b>'+(tr.present?esc(tr.type):'空')+'</b><br><small>'+String.fromCharCode(65+u.id)+(i+1)+(tr.present&&tr.remain>=0?' · '+tr.remain+'%':'')+'</small></div>';}));
  $('trays').innerHTML=h;
  const hms=d.hms||[];$('hmsCard').hidden=!hms.length;$('hms').innerHTML=hms.map(c=>'<li>'+esc(c)+'</li>').join('');
+ const md=$('mode');md.hidden=!d.enabled;md.textContent=(MODE[d.mode]||'--')+(d.auto_mode?'（自動）':'');
+ $('bMode').hidden=!d.enabled;$('bMode').textContent=d.mode=='mqtt'?'🤖 LOCAL LLM に戻す':'🖨 MQTT モードにする';
  $('bVoice').textContent=d.voice?'🔊 実況 ON':'🔇 実況 OFF';
  $('bLight').textContent=d.light===1?'💡 ライト ON':'💡 ライト OFF';
  const lg=d.log||[];$('log').innerHTML=lg.length?lg.map(e=>'<li><span class="face">'+(moods[e.mood]||'🙂')+'</span><div>'+esc(e.text)+'<small>'+ago(e.ago)+'</small></div></li>').join(''):'<li class="empty">まだ実況はありません</li>';
@@ -155,6 +158,7 @@ async function load(){try{const r=await fetch('/api/printer',{cache:'no-store'})
 async function loop(){await load();setTimeout(loop,document.hidden?8000:2000);}
 $('bReport').onclick=()=>post('/api/printer/report');
 $('bRefresh').onclick=()=>post('/api/printer/refresh');
+$('bMode').onclick=()=>post('/api/mode','mode='+(st.mode=='mqtt'?'llm':'mqtt')).then(()=>setTimeout(load,500));
 $('bVoice').onclick=()=>post('/api/printer/voice','on='+(st.voice?0:1)).then(load);
 $('bLight').onclick=()=>post('/api/printer/light','on='+(st.light===1?0:1));
 $('bSay').onclick=()=>{const v=$('sayText').value.trim();if(v)post('/api/printer/say','text='+encodeURIComponent(v)).then(()=>{$('sayText').value='';});};

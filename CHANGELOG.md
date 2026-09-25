@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+## [v2.1.0] - 2026-09-25
+
+プレリリース。プリンターが動き出したら自動で MQTT モード（プリンター実況）に切り替わります。
+
+### Added
+
+- MQTT モード（プリンター実況）。顔に HUD を出し、頭タップで状況報告、実況をすべて喋る
+- 印刷の準備・印刷・一時停止に入ったら自動で MQTT モードへ切り替え、終わって 5 分で元のモードへ戻す。
+  印刷中に手動で別のモードを選んだら、そのジョブの間は自動で戻さない
+- 設定「印刷が始まったら自動で MQTT モードにする」（NVS `auto_mqtt`、既定 ON）
+- `POST /api/mode`（`mode=mqtt / llm / level`）と、ダッシュボードのモード表示・切り替えボタン
+- `/api/printer` に `mode` と `auto_mode`、`/api/status` に `mode`
+
+### Changed
+
+- 本体メニューを3列に再配置し、1段目をモード（MQTT / LOCAL LLM / LEVEL HOLD）にした
+- HUD は MQTT モードの間だけ表示する
+- LOCAL LLM / LEVEL HOLD では、工程・温度・定期報告などの細かい実況（Low）は喋らず Web のログに残す
+- 頭頂タップは MQTT モードでは状況報告、それ以外は設定した文章
+- LEVEL HOLD を始められなかったときは、今のモードのままにする
+
 ## [v2.0.0] - 2026-09-25
 
 Printer Commentary Edition。stackchan-mqtt としての最初のリリースです。

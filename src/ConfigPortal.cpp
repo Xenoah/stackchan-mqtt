@@ -222,6 +222,8 @@ void ConfigPortal::load() {
   config_.bambuHost = readString("bb_host", "");
   config_.bambuSerial = readString("bb_serial", "");
   config_.bambuAccessCode = readString("bb_code", "");
+  config_.autoPrinterMode =
+      preferences_.getBool("auto_mqtt", config_.autoPrinterMode);
   config_.commentaryVoice =
       preferences_.getBool("cm_voice", config_.commentaryVoice);
   config_.commentaryStep =
@@ -259,6 +261,7 @@ void ConfigPortal::save() {
   preferences_.putString("bb_host", config_.bambuHost);
   preferences_.putString("bb_serial", config_.bambuSerial);
   preferences_.putString("bb_code", config_.bambuAccessCode);
+  preferences_.putBool("auto_mqtt", config_.autoPrinterMode);
   preferences_.putBool("cm_voice", config_.commentaryVoice);
   preferences_.putUChar("cm_step", config_.commentaryStep);
   preferences_.putUShort("cm_period", config_.commentaryPeriodMin);
@@ -359,6 +362,7 @@ void ConfigPortal::registerRoutes() {
 
     // プリンタ
     config_.bambuEnabled = server_.hasArg("bambu_enabled");
+    config_.autoPrinterMode = server_.hasArg("auto_mqtt");
     config_.bambuHost = server_.arg("bambu_host");
     config_.bambuHost.trim();
     config_.bambuSerial = server_.arg("bambu_serial");
@@ -461,6 +465,15 @@ void ConfigPortal::registerRoutes() {
     ok();
   });
 
+  // POST /api/mode → モード切り替え（mode=mqtt / llm / level）
+  server_.on("/api/mode", HTTP_POST, [this]() {
+    const String mode = server_.arg("mode");
+    const bool valid = mode == "mqtt" || mode == "llm" || mode == "level";
+    if (valid && printerApi_.mode) printerApi_.mode(mode);
+    server_.send(200, "application/json",
+                 valid ? "{\"ok\":true}" : "{\"ok\":false}");
+  });
+
   server_.on("/api/printer/say", HTTP_POST, [this]() {
     String text = server_.arg("text");
     text.trim();
@@ -539,6 +552,8 @@ String ConfigPortal::pageHtml(const String& message) {
   html += F("<section class='card' id='printer'><h3>🖨 Bambu Lab プリンター</h3>");
   html += checkbox("bambu_enabled", config_.bambuEnabled,
                    "プリンターを監視して実況する");
+  html += checkbox("auto_mqtt", config_.autoPrinterMode,
+                   "印刷が始まったら自動で MQTT モード（プリンター実況）にする");
   html += F("<div class='grid2'><label>IP アドレス<input name='bambu_host' "
             "inputmode='decimal' placeholder='192.168.1.50' value='");
   html += htmlEscape(config_.bambuHost);
@@ -669,8 +684,9 @@ String ConfigPortal::pageHtml(const String& message) {
   html += F("'></label><label>A ボタンで話す文章"
             "<textarea name='speech' rows='3'>");
   html += htmlEscape(config_.speechText);
-  html += F("</textarea></label><p class='hint'>プリンター監視中は、頭タップで"
-            "プリンターの状況を話します（A ボタンはこの文章）。</p></section>");
+  html += F("</textarea></label><p class='hint'>LOCAL LLM モードでは頭タップでも"
+            "この文章を話します。MQTT モードでは頭タップでプリンターの状況を話します"
+            "（A ボタンはいつもこの文章）。</p></section>");
 
   html += F("<div class='save'><button type='submit'>保存して再起動</button></div>"
             "</form>");
@@ -792,6 +808,8 @@ String ConfigPortal::statusHtml() {
           htmlEscape(config_.bambuSerial.isEmpty() ? String("-")
                                                    : config_.bambuSerial) +
           "</td></tr>";
+  html += String("<tr><td>自動 MQTT モード</td><td class='") +
+          (config_.autoPrinterMode ? "ok'>ON" : "warn'>OFF") + "</td></tr>";
   html += String("<tr><td>実況の声</td><td class='") +
           (config_.commentaryVoice ? "ok'>ON" : "warn'>OFF") + "</td></tr>";
   html += F("</table></section>");
@@ -966,7 +984,9 @@ String ConfigPortal::apiStatusJson() {
   j += jsonEscape(config_.ttsEngineType);
   j += F("\",\"printer_monitor\":");
   j += config_.bambuEnabled ? F("true") : F("false");
-  j += F(",\"reset_reason\":\"");
+  j += F(",\"mode\":\"");
+  j += jsonEscape(runtimeStatus_.appMode);
+  j += F("\",\"reset_reason\":\"");
   j += jsonEscape(runtimeStatus_.resetReason);
   j += F("\",\"free_heap\":");
   j += String(runtimeStatus_.freeHeap);

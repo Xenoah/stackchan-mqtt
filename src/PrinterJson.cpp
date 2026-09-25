@@ -60,11 +60,13 @@ String etaClockShort(int remainingMin) {
 
 String printerStateJson(const PrinterState& s,
                         const PrintCommentator& commentator, bool enabled,
-                        bool voice) {
+                        bool voice, const char* mode, bool autoMode) {
   JsonDocument doc;
   JsonObject root = doc.to<JsonObject>();
   root["enabled"] = enabled;
   root["voice"] = voice;
+  root["mode"] = mode;
+  root["auto_mode"] = autoMode;
   root["link"] = linkName(s.link);
   if (s.link == LinkState::Error) root["mqtt_error"] = s.mqttErrorCode;
   root["synced"] = s.synced;
