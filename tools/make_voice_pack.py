@@ -24,6 +24,10 @@ VOICEVOX の声では SNR が 15dB 前後まで落ちてザラつくため選択
     断片     そのままの文字列（例: "印刷スタート！"）
     #N       数字（例: "#200" = にひゃく）
     =N単位   連濁・促音を含む数字＋単位（例: "=1時間", "=45%", "=23分"）
+    カナ / カナ / カナ
+             1モーラの音（低い音程 / 高い音程 / 母音の無声化）。本体はこれをつなげて
+             辞書（dict/）で読みとアクセントを付けた任意の日本語・英語を喋る。
+             「ア＋モーラ＋同じ母音」を平らな音程で合成し、真ん中のモーラだけを切り出す
 """
 
 from __future__ import annotations
@@ -33,10 +37,12 @@ import concurrent.futures
 import hashlib
 import io
 import json
+import math
 import pathlib
 import re
 import struct
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 import wave
@@ -205,6 +211,157 @@ def mulaw_encode(samples: list[int]) -> bytes:
     return bytes(out)
 
 
+# ---------------------------------------------------------------------------
+# モーラ（任意の文章を読むための 1 拍ずつの音）
+# ---------------------------------------------------------------------------
+
+# 本体（src/talk/）が出すモーラ。VOICEVOX が1モーラとして読めないものは自動で外す
+MORA_BASIC = list("アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワン"
+                  "ガギグゲゴザジズゼゾダデドバビブベボパピプペポヴ")
+MORA_YOON = [c + s for c in "キギシジチニヒビピミリ" for s in "ャュョ"]
+MORA_EXTRA = ["シェ", "ジェ", "チェ", "ティ", "ディ", "トゥ", "ドゥ", "テュ", "デュ", "ファ", "フィ", "フェ", "フォ",
+              "フュ", "ヴァ", "ヴィ", "ヴェ", "ヴォ", "ヴュ", "ウィ", "ウェ", "ウォ", "イェ", "ツァ", "ツィ", "ツェ",
+              "ツォ", "クァ", "クィ", "クェ", "クォ", "グァ", "スィ", "ズィ", "キェ", "ニェ", "ヒェ", "ミェ", "リェ",
+              "ギェ", "ビェ", "ピェ"]
+MORA_KEY_LOW, MORA_KEY_HIGH, MORA_KEY_DEVOICED = "\x01", "\x02", "\x03"
+FRAME_RATE = 24000 / 256          # VOICEVOX の音素長はこの単位（93.75 フレーム/秒）で丸められる
+MORA_VOWEL_FRAMES = 9             # 母音の長さ（約 96ms）
+MORA_PAD_FRAMES = 8               # 前後につける母音・無音の長さ
+MORA_PITCH = {"low": 5.84, "high": 6.08}   # ずんだもんの低い・高い音程（log F0、約4半音差）
+MORA_VOWEL_RMS = 2700   # 母音の大きさをそろえる目安（実況のセリフの母音とだいたい同じ）
+MORA_DEVOICED_RMS = 900 # 無声化したモーラ（ほぼ子音の息の音）の大きさ
+
+
+# カナ → VOICEVOX の音素（子音, 母音）
+_ROW_CONSONANT = {}
+for _row, _cons in [("カキクケコ", "k"), ("ガギグゲゴ", "g"), ("サスセソ", "s"), ("シ", "sh"), ("ザズゼゾ", "z"),
+                    ("ジ", "j"), ("タテト", "t"), ("チ", "ch"), ("ツ", "ts"), ("ダデド", "d"), ("ナニヌネノ", "n"),
+                    ("ハヒヘホ", "h"), ("フ", "f"), ("バビブベボ", "b"), ("パピプペポ", "p"), ("マミムメモ", "m"),
+                    ("ヤユヨ", "y"), ("ラリルレロ", "r"), ("ワ", "w"), ("ヴ", "v"), ("アイウエオ", "")]:
+    for _ch in _row:
+        _ROW_CONSONANT[_ch] = _cons
+_VOWEL_OF = {}
+for _row, _v in [("アカガサザタダナハバパマヤラワァャ", "a"), ("イキギシジチニヒビピミリィ", "i"),
+                 ("ウクグスズツヌフブプムユルヴゥュ", "u"), ("エケゲセゼテデネヘベペメレェ", "e"),
+                 ("オコゴソゾトドノホボポモヨロォョ", "o")]:
+    for _ch in _row:
+        _VOWEL_OF[_ch] = _v
+_SPECIAL = {"ティ": ("t", "i"), "ディ": ("d", "i"), "トゥ": ("t", "u"), "ドゥ": ("d", "u"), "テュ": ("ty", "u"),
+            "デュ": ("dy", "u"), "シェ": ("sh", "e"), "ジェ": ("j", "e"), "チェ": ("ch", "e"), "ウィ": ("w", "i"),
+            "ウェ": ("w", "e"), "ウォ": ("w", "o"), "イェ": ("y", "e"), "スィ": ("s", "i"), "ズィ": ("z", "i"),
+            "クァ": ("kw", "a"), "グァ": ("gw", "a"), "ヴュ": ("by", "u"), "フュ": ("hy", "u")}
+
+
+def mora_phonemes(kana: str):
+    """カナ1モーラ → (子音 or None, 母音)。分からなければ None"""
+    if kana == "ン":
+        return None, "N"
+    if kana in _SPECIAL:
+        return _SPECIAL[kana]
+    base = _ROW_CONSONANT.get(kana[0])
+    if base is None:
+        return None
+    if len(kana) == 1:
+        return (base or None), _VOWEL_OF[kana[0]]
+    small = kana[1]
+    vowel = _VOWEL_OF.get(small)
+    if vowel is None:
+        return None
+    if small in "ャュョ" or (small == "ェ" and _VOWEL_OF[kana[0]] == "i"):
+        if base in ("sh", "j", "ch"):
+            return base, vowel
+        if _VOWEL_OF[kana[0]] != "i" or base in ("", "y", "w"):
+            return None
+        return base + "y", vowel
+    # ファ・ヴァ・ツァ など（子音はそのまま、母音は小書き文字）
+    if base in ("f", "v", "ts"):
+        return base, vowel
+    return None
+
+
+def predicted_consonant_length(base: str, speaker: int, consonant: str, vowel: str, kana: str) -> float:
+    """VOICEVOX の音素長モデルで「ア＋モーラ＋ア」の子音の長さを予測させる。"""
+    phrase = [{"moras": [
+        {"text": "ア", "consonant": None, "consonant_length": None, "vowel": "a", "vowel_length": 0.1, "pitch": 5.8},
+        {"text": kana, "consonant": consonant, "consonant_length": 0.05 if consonant else None, "vowel": vowel,
+         "vowel_length": 0.1, "pitch": 5.8},
+        {"text": "ア", "consonant": None, "consonant_length": None, "vowel": "a", "vowel_length": 0.1, "pitch": 5.8}],
+        "accent": 1, "pause_mora": None, "is_interrogative": False}]
+    result = json.loads(http_post(f"{base}/mora_length?speaker={speaker}", json.dumps(phrase).encode("utf-8"),
+                                  "application/json"))
+    return result[0]["moras"][1]["consonant_length"] or 0.0
+
+
+def synthesize_mora(base: str, speaker: int, kana: str, pitch: float, devoiced: bool, speed: float,
+                    rate: int) -> list[int] | None:
+    """モーラを「ア｜モーラ｜同じ母音」の中から切り出す（前後とのつながりが自然になるように）。"""
+    phonemes = mora_phonemes(kana)
+    if phonemes is None:
+        return None
+    consonant, vowel = phonemes
+    try:
+        consonant_len = predicted_consonant_length(base, speaker, consonant, vowel, kana) if consonant else 0.0
+    except urllib.error.HTTPError:
+        return None  # この話者のモデルが知らない音素
+    query = json.loads(http_post(f"{base}/audio_query?speaker={speaker}&text=" + urllib.parse.quote("ア"), None, None))
+    if devoiced:
+        if vowel not in ("i", "u"):
+            return None
+        vowel = vowel.upper()  # VOICEVOX は大文字の母音を無声で読む
+    frame = 1 / FRAME_RATE
+    cons_frames = max(2, round(consonant_len / speed * FRAME_RATE)) if consonant else 0
+    tail_vowel = {"n": "a", "cl": "a"}.get(vowel.lower(), vowel.lower())
+    tail_kana = {"a": "ア", "i": "イ", "u": "ウ", "e": "エ", "o": "オ"}[tail_vowel]
+
+    def mora(text, c, c_frames, v, v_frames, p):
+        return {"text": text, "consonant": c, "consonant_length": c_frames * frame if c else None,
+                "vowel": v, "vowel_length": v_frames * frame, "pitch": 0.0 if v in ("I", "U") else p}
+
+    query["accent_phrases"] = [{
+        "moras": [mora("ア", None, 0, "a", MORA_PAD_FRAMES, pitch),
+                  mora(kana, consonant, cons_frames, vowel, MORA_VOWEL_FRAMES, pitch),
+                  mora(tail_kana, None, 0, tail_vowel, MORA_PAD_FRAMES, pitch)],
+        "accent": 1, "pause_mora": None, "is_interrogative": False}]
+    query.update(speedScale=1.0, pitchScale=0.0, intonationScale=1.0, prePhonemeLength=MORA_PAD_FRAMES * frame,
+                 postPhonemeLength=MORA_PAD_FRAMES * frame, outputSamplingRate=rate, outputStereo=False)
+    try:
+        wav_bytes = http_post(f"{base}/synthesis?speaker={speaker}", json.dumps(query).encode("utf-8"),
+                              "application/json")
+    except urllib.error.HTTPError:
+        return None
+    with wave.open(io.BytesIO(wav_bytes)) as wav:
+        raw = wav.readframes(wav.getnframes())
+    samples = list(struct.unpack(f"<{len(raw) // 2}h", raw))
+    per_frame = rate / FRAME_RATE
+    start = round(2 * MORA_PAD_FRAMES * per_frame)
+    end = round((2 * MORA_PAD_FRAMES + cons_frames + MORA_VOWEL_FRAMES) * per_frame)
+    cut = samples[start:end]
+    # VOICEVOX は音程が低いほど声が小さくなるので、母音の大きさでそろえる
+    vowel_part = cut[-round(MORA_VOWEL_FRAMES * per_frame):] if not devoiced else cut
+    rms = math.sqrt(sum(x * x for x in vowel_part) / max(1, len(vowel_part)))
+    target = MORA_DEVOICED_RMS if devoiced else MORA_VOWEL_RMS
+    gain = max(0.3, min(4.0, target / rms)) if rms > 0 else 1.0
+    cut = [max(-32768, min(32767, int(x * gain))) for x in cut]
+    # 端のプチノイズを防ぐ短いフェード（本体はモーラ同士を 5ms 重ねてつなぐ）
+    fade = max(1, rate * 15 // 10000)
+    for i in range(min(fade, len(cut))):
+        w = (i + 1) / (fade + 1)
+        cut[i] = int(cut[i] * w)
+        cut[-1 - i] = int(cut[-1 - i] * w)
+    return cut
+
+
+def mora_jobs() -> list[tuple[str, str, float, bool]]:
+    """(キー, カナ, 音程, 無声) の一覧"""
+    jobs = []
+    for kana in MORA_BASIC + MORA_YOON + MORA_EXTRA:
+        jobs.append((MORA_KEY_LOW + kana, kana, MORA_PITCH["low"], False))
+        jobs.append((MORA_KEY_HIGH + kana, kana, MORA_PITCH["high"], False))
+        if kana[0] in "カキクケコサシスセソタチツテトハヒフヘホパピプペポ":  # 無声化するのは無声子音のイ段・ウ段だけ
+            jobs.append((MORA_KEY_DEVOICED + kana, kana, MORA_PITCH["low"], True))
+    return jobs
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--voicevox", default="http://127.0.0.1:50021", help="VOICEVOX エンジンの URL")
@@ -254,6 +411,29 @@ def main() -> int:
             rendered[key] = samples
             if done % 50 == 0 or done == len(entries):
                 print(f"  {done}/{len(entries)}")
+
+    # モーラ（任意の文章を読むための音）
+    def render_mora(job):
+        key, kana, pitch, devoiced = job
+        tag = f"mora3|{args.speaker}|{args.speed}|{args.rate}|{kana}|{pitch}|{devoiced}"
+        cache_file = cache_dir / (hashlib.sha1(tag.encode("utf-8")).hexdigest() + ".pcm")
+        if cache_file.exists():
+            raw = cache_file.read_bytes()
+            return key, list(struct.unpack(f"<{len(raw) // 2}h", raw)) if raw else None
+        samples = synthesize_mora(args.voicevox, args.speaker, kana, pitch, devoiced, args.speed, args.rate)
+        cache_file.write_bytes(struct.pack(f"<{len(samples)}h", *samples) if samples else b"")
+        return key, samples
+
+    jobs = mora_jobs()
+    skipped = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for key, samples in pool.map(render_mora, jobs):
+            if samples:
+                rendered[key] = samples
+            elif key[0] != MORA_KEY_DEVOICED:
+                skipped.append(key[1:])
+    print(f"  morae: {sum(1 for k in rendered if k[0] in (MORA_KEY_LOW, MORA_KEY_HIGH)) // 2} kana"
+          + (f" (VOICEVOX が読めず除外: {' '.join(sorted(set(skipped)))})" if skipped else ""))
 
     index = bytearray()
     data = bytearray()

@@ -218,6 +218,16 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 | H4 | 組み込み | メニュー3×3に「Wi-Fi」「MQTT 設定」。`openDeviceSetup()` はメニューから顔の描画を止めたまま画面を切り替え、`deviceSetupOpen` の間は首を動かさない。セットアップ AP 中は loop が `handleSetupPortalTouch()`（タップで Wi-Fi 画面）。SSID 未設定の初回起動は自動で Wi-Fi 画面 | ✅ |
 | H5 | 共通部品 | `SetupUi.h`: 色・`Button`・`TouchTracker`（押下表示と離したときの確定）・`fitText()` | ✅ |
 
+## Part I: 内蔵ボイスでどんな文章も読む（2026-09-25 / v2.3.0）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| I1 | 読み辞書 | `tools/make_dict.py` → `dict/ja.dic`（naist-jdic、固有名詞は地域・一般・姓のみ、まれな活用形は除く、1表層形8項目まで、64語ずつ raw deflate、連接コストは k-means で 256×256 に縮約、1字項目の無い漢字は熟語から読みを推定）、`dict/en.dic`（CMUdict × wordfreq 上位12万語のうち決定木で当たらない語とローマ字として読める語、決定木 IGTree 5段 370KB）。`board_build.embed_files` で埋め込み、`_binary_dict_*_start` で参照 | ✅ |
+| I2 | 読み上げ前処理 | `src/talk/`（Arduino 非依存）。`TextReader` → `JaReader`（Viterbi・Open JTalk の njd_set_accent_phrase/accent_type 規則・無声化）/`EnReader`/`Numbers`。数・英単語のあとは文頭の右文脈を変えて助数詞・助詞を選ばせる。inflate は S3 の ROM `tinfl_decompress`（PC は miniz）。作業領域は PSRAM（`allocLarge`） | ✅ |
+| I3 | モーラの音 | `make_voice_pack.py` がキー `\x01カナ`（低 5.84）/`\x02カナ`（高 6.08）/`\x03カナ`（無声化）を追加。カナ→音素は自前の表（Open JTalk は「アキャア」を キ+ヤ に分けるため解析に頼らない）、子音長は `/mora_length`、フレーム（93.75fps）単位で「ア＋モーラ＋同じ母音」から切り出し、母音の RMS を 2700 にそろえる | ✅ |
+| I4 | 再生 | `BuiltinVoice::plan()`: 文ごとにクリップで全部読めれば従来どおり、読めなければ `planSpeech()`。モーラは 60 サンプル（5ms）重ねてつなぐ（`holdTail`/`join`）。ッ は 70ms の間、ー は前の母音の音 | ✅ |
+| I5 | 検証 | `tools/talk_test/run.py --eval`（VOICEVOX の kana と比較）: 一般文 147 文でモーラ誤り 1.66%、実況文 137 文で 0.75%、アクセント誤り約 3.5〜3.9%。PC で 0.2〜0.5ms/文。実機は未確認 | ✅ |
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
@@ -236,3 +246,4 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 - 2026-09-24: 内蔵ボイス（Part F）。VOICEVOX でボイスパックを作り LittleFS へ焼き、TTS サーバーなしで実況できるようにした。
 - 2026-09-25: 印刷開始で MQTT モードへ自動切り替え（Part G）。ビルド成功（RAM 21.9%, Flash 52.6% / app 3MB）。v2.1.0 プレリリース。
 - 2026-09-25: 本体のタッチキーボードで Wi-Fi・MQTT を設定（Part H）。画面は PIL のモックで配置を確認。ビルド成功（Flash 53.6%）。v2.2.0 プレリリース。
+- 2026-09-25: 内蔵ボイスでどんな文章も読む（Part I）。ビルド成功（Flash 5.19MB / 5.75MB）。v2.3.0 プレリリース。

@@ -930,6 +930,7 @@ void serviceApp() {
     status.freePsram = ESP.getFreePsram();
     status.cameraActive = cameraGazeActive;
     status.voiceClips = builtinVoice.isReady() ? builtinVoice.clipCount() : 0;
+    status.voiceFreeText = builtinVoice.canReadAnything();
     configPortal.setRuntimeStatus(status);
     lastStatusUpdateAt = now;
   }
@@ -1009,10 +1010,16 @@ void speakText(const String& text) {
   showStatusLed(0, 0, 96); // 青色LED: TTS通信中
 
   bool success = useServer && playTts(text);
-  // サーバーが使えない・失敗したら内蔵ボイスで。読めない文章（英文や
-  // Gateway 用の __CURRENT__ など）はあいさつに置き換える。
+  // サーバーが使えない・失敗したら内蔵ボイスで。Gateway 用の指示（__CURRENT__・
+  // __REASK_LAST__）や読めない文章はあいさつに置き換える（__SAY__ は本文を読む）。
   if (!success && builtinVoice.isReady()) {
-    success = builtinVoice.speak(text) || builtinVoice.speak(kBuiltinGreeting);
+    String spoken = text;
+    if (spoken.startsWith("__SAY__")) {
+      spoken = spoken.substring(7);
+    } else if (spoken.startsWith("__")) {
+      spoken = kBuiltinGreeting;
+    }
+    success = builtinVoice.speak(spoken) || builtinVoice.speak(kBuiltinGreeting);
   }
 
   if (success) {

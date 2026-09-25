@@ -1,4 +1,4 @@
 #pragma once
 
 // ファームウェアのバージョン（リリースタグと合わせる）
-constexpr char kAppVersion[] = "v2.2.0";
+constexpr char kAppVersion[] = "v2.3.0";

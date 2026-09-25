@@ -8,7 +8,7 @@ M5Stack StackChan（K151 / CoreS3）が **Bambu Lab P1S の印刷をリアルタ
 - プリンタ通信: [Xenoah/ESP32-bambu-MQTT](https://github.com/Xenoah/ESP32-bambu-MQTT)
   の Bambu Lab LAN MQTT 実装を StackChan 向けに再構成
 
-**現在のリリース: [v2.2.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.2.0)（プレリリース）**
+**現在のリリース: [v2.3.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.3.0)（プレリリース）**
 
 ```mermaid
 flowchart LR
@@ -22,8 +22,9 @@ flowchart LR
 
 > [!NOTE]
 > **内蔵ボイス**（VOICEVOX で作ったずんだもんの声を本体に焼き込んだもの）があれば、
-> PC やスマホの TTS サーバーなしで StackChan 単体で実況します。TTS サーバーを使う場合も、
-> サーバーにつながらないときは自動で内蔵ボイスに切り替わります。
+> PC やスマホの TTS サーバーなしで StackChan 単体で実況します。実況の決まり文句は録音どおりの
+> 自然な声で、それ以外の**日本語・英語の文章もすべて**本体の読み辞書で読んでモーラ（1拍の音）を
+> つなげて喋ります。TTS サーバーを使う場合も、サーバーにつながらないときは自動で内蔵ボイスに切り替わります。
 > StackChan とプリンターは同じ LAN にある必要があります。
 
 ## できること
@@ -129,7 +130,7 @@ microSD スロット付近の RST ボタンを約3秒長押ししてダウンロ
 Wi-Fi 設定・キャリブレーションを保存している NVS も消えるので、初回セットアップからになります。
 
 ```powershell
-python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.2.0-full.bin
+python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.3.0-full.bin
 ```
 
 **アップデート（設定を残す）**: 4つのファイルをそれぞれのアドレスに書き込みます。NVS（0x9000〜）には触れません。
@@ -147,21 +148,47 @@ python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash `
 VOICEVOX を起動した状態で、ボイスパックを作って本体のファイル領域へ書き込みます。
 
 ```powershell
-python tools/make_voice_pack.py          # data/voice.pak を作る（初回 3〜5 分、2回目からはキャッシュで速い）
+python tools/make_voice_pack.py          # data/voice.pak を作る（初回 5〜8 分、2回目からはキャッシュで速い）
 & "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run -t uploadfs
 ```
 
-- 実況のセリフ断片（ソースの文字列から自動抽出）・数字・「数字＋単位」の約 680 クリップを
-  ずんだもん（話者 3）で合成し、μ-law 12kHz で約 8.5MB にまとめます。
-- 本体は実況文をこのクリップへ最長一致で分解し、つなげて再生します（口パクつき）。
+- 実況のセリフ断片（ソースの文字列から自動抽出）・数字・「数字＋単位」の約 680 クリップと、
+  **モーラ（カ・キャ・ティ など 141 音）× 低い音程・高い音程＋無声化**の約 300 クリップを
+  ずんだもん（話者 3）で合成し、μ-law 12kHz で約 9.1MB にまとめます。
+- 本体は、実況文のようにクリップだけで読める文はクリップをつなげて読み（自然な抑揚）、
+  それ以外の文は読み辞書で読み・アクセントを決めてモーラをつなげて読みます（下記）。
 - 実況の文面を変えたら、スクリプトを実行し直して `uploadfs` するだけで追従します。
 - 話者や話速は `--speaker` `--speed` で変えられます（例: `--speaker 1` でずんだもん あまあま）。
 - 生成した音声はリポジトリに含めていません（`data/voice.pak` は `.gitignore`）。
   VOICEVOX とキャラクターの利用規約に従ってください（例: `VOICEVOX:ずんだもん`）。
 
 > [!IMPORTANT]
-> このバージョンからパーティション構成が変わりました（アプリ 3MB＋ファイル領域 12.8MB）。
-> NVS の位置は同じなので Wi-Fi 設定やキャリブレーションは残ります。
+> v2.3.0 でパーティション構成が変わりました（アプリ 5.75MB（読み辞書を含む）＋ファイル領域 10.1MiB）。
+> ファイル領域の位置が変わったので、**ボイスパックを作り直して `uploadfs` し直してください**
+> （古いボイスパックのままでは内蔵ボイスが使えません）。NVS の位置は同じなので Wi-Fi 設定や
+> キャリブレーションは残ります。
+
+#### どんな文章でも読むしくみ
+
+| 段階 | 内容 |
+|---|---|
+| 日本語 | ファームウェアに埋め込んだ読み辞書（`dict/ja.dic`、mecab-naist-jdic 由来の約 31 万語・2.8MB）で、MeCab と同じ考え方（単語コスト＋連接コスト、連接コストは 256 クラスタに縮約）の最適な区切りを選び、読みを決めます。Open JTalk の規則でアクセント句とアクセント核を決め、母音の無声化（です・ます など）も付けます。辞書に無い漢字は熟語から推定した音読みで読みます |
+| 数字 | 日本語の数として読み、助数詞の音の変化も付けます（1分 → イップン、3本 → サンボン、2人 → フタリ、4時 → ヨジ、1億3,000万 → イチオクサンゼンマン） |
+| 英語 | 英語辞書（`dict/en.dic`、CMU 発音辞書の頻出語）で発音を引き、カタカナ読みにします（computer → コンピューター）。辞書に無い語は綴りから発音を推定し（CMU 辞書で学習した決定木）、ローマ字として読める語（zundamon → ズンダモン）はローマ字読み、大文字の略語（PLA, AMS）はアルファベット読みにします |
+| 記号 | % ℃ & + = @ # × ÷ などを読み、句読点は間にします |
+| 音 | 東京方言の高低（アクセント）に合わせて高い音・低い音のモーラを選び、5ms 重ねてつなげます |
+
+VOICEVOX の解析結果と比べた読みの誤り（モーラ単位）は、Wikipedia などの一般的な文で約 1.7%、
+実況の文で約 0.8% です。音の高さ（アクセント）の違いは約 4% です。
+
+PC で同じ処理を試せます（`python -m pip install ziglang` で C++ コンパイラを入れる）:
+
+```powershell
+python tools/talk_test/run.py "今日は3時に1分だけ休憩して、PETGで印刷するよ"
+python tools/talk_test/run.py --wav sample.wav "Hello! 今日もいい天気だね"   # data/voice.pak で音声を作る
+```
+
+読み辞書は `python tools/make_dict.py` で作り直せます（通常は不要。リポジトリの `dict/` に入っています）。
 
 資格情報はソースに書かず、すべて Web 設定画面から本体の NVS に保存します。
 
@@ -224,8 +251,8 @@ StackChan が Wi-Fi につながったら、`http://<StackChan の IP>/settings`
 
 サーバー（`voicevox_compatible` / `simple_wav`）を選んでいても、接続に失敗したら同じ文を内蔵ボイスで
 言い直し、その後 3 分間はサーバーを試さずに内蔵ボイスで喋ります（接続待ちで固まらないように、
-サーバーへの接続タイムアウトは 4 秒）。内蔵ボイスは実況の文章をほぼすべて読めますが、
-ジョブ名は「作品」と読み替え、辞書にない自由な文章（英文など）は読めない部分を飛ばします。
+サーバーへの接続タイムアウトは 4 秒）。内蔵ボイスは実況の決まり文句をクリップで、それ以外の文章
+（ジョブ名・Web から送った文章・英文など）をモーラで読みます。
 
 VOICEVOX Engine は LAN から届くよう `--host 0.0.0.0` で起動してください（例: `run.exe --host 0.0.0.0 --port 50021`）。
 Windows ファイアウォールはプライベートネットワークからのアクセスのみ許可してください。
@@ -260,9 +287,19 @@ src/
 ├─ SetupUi.h            本体の設定画面の共通部品（色・ボタン・押下の追跡）
 ├─ AvatarFaceController.* 顔（m5avatar）、表情、配色、HUD の差し込み
 ├─ VoiceVoxClient.*     TTS クライアント（WAV ストリーミング再生・リップシンク）
+├─ BuiltinVoice.*       内蔵ボイス（セリフのクリップ／モーラをつなげて再生）
+├─ talk/                文章 → 読み・アクセント（PC でもビルドできる。tools/talk_test）
+│  ├─ TextReader.*      入口（日本語・数字・英語・記号・句読点の振り分け）
+│  ├─ JaReader.*        日本語の区切り（Viterbi）とアクセント句
+│  ├─ JaDict.* / BlockStore.*  読み辞書（deflate のブロックを ROM の inflate で展開）
+│  ├─ EnReader.*        英語 → カタカナ読み（辞書・決定木・ローマ字・アルファベット）
+│  ├─ Numbers.*         数の読みと助数詞の音の変化
+│  └─ Kana.*            モーラ・アクセント句・記法の共通部品
 ├─ CalibrationController.* サーボ・IMU キャリブレーション
 └─ main.cpp             全体の制御（実況の再生、LED、メニュー、タッチ）
 gateway/                Android Termux 用 LLM / TTS Gateway（__SAY__ 対応）
+dict/                   読み辞書（tools/make_dict.py が作る。ファームウェアに埋め込む）
+tools/                  ボイスパック・読み辞書の生成、PC での読み上げテスト（talk_test）
 ```
 
 ### MQTT 接続

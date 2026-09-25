@@ -1,0 +1,2 @@
+# reading dictionaries embedded in the firmware (tools/make_dict.py)
+*.dic binary

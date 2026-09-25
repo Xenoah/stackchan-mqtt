@@ -77,6 +77,7 @@ struct RuntimeStatus {
   uint32_t freePsram = 0;       // 空きPSRAM（バイト）
   bool cameraActive = false;    // カメラ目線が動作中かどうか
   uint16_t voiceClips = 0;      // 内蔵ボイスのクリップ数（0 = 未書き込み）
+  bool voiceFreeText = false;   // 内蔵ボイスでどんな文章も読める（モーラの音と読み辞書あり）
 };
 
 // WiFi接続・設定用Webサーバを管理するクラス。

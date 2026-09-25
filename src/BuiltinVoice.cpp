@@ -3,6 +3,17 @@
 #include <LittleFS.h>
 #include <M5Unified.h>
 
+#include "talk/EnReader.h"
+#include "talk/JaDict.h"
+#include "talk/Kana.h"
+#include "talk/TextReader.h"
+
+// ファームウェアに埋め込んだ読み辞書（platformio.ini の board_build.embed_files）
+extern const uint8_t kJaDicStart[] asm("_binary_dict_ja_dic_start");
+extern const uint8_t kJaDicEnd[] asm("_binary_dict_ja_dic_end");
+extern const uint8_t kEnDicStart[] asm("_binary_dict_en_dic_start");
+extern const uint8_t kEnDicEnd[] asm("_binary_dict_en_dic_end");
+
 namespace {
 
 constexpr char kPackPath[] = "/voice.pak";
@@ -14,11 +25,22 @@ constexpr size_t kBufferCount = 3;
 constexpr size_t kBufferSamples = 1024;
 alignas(4) int16_t pcmBuffers[kBufferCount][kBufferSamples];
 uint8_t rawBuffer[kBufferSamples];
+int16_t decodeBuffer[kBufferSamples];
+
+// モーラどうしを重ねる長さ（12kHz で約 5ms）
+constexpr size_t kOverlapSamples = 60;
+int16_t tailBuffer[kOverlapSamples];
 
 // 文の区切りの間（ms）
 constexpr uint16_t kSentencePauseMs = 220;
 constexpr uint16_t kCommaPauseMs = 110;
 constexpr uint16_t kAfterSentenceClipPauseMs = 150;
+constexpr uint16_t kSokuonMs = 70;  // 促音「ッ」の間
+
+// モーラの音のキー（make_voice_pack.py と同じ）
+constexpr char kMoraLow = '\x01';
+constexpr char kMoraHigh = '\x02';
+constexpr char kMoraDevoiced = '\x03';
 
 const int16_t kStepTable[89] = {
     7,     8,     9,     10,    11,    12,    13,    14,    16,    17,
@@ -85,10 +107,28 @@ bool endsWithSentenceMark(const char* key, size_t len) {
   return false;
 }
 
+// 読み辞書と読み上げの前処理（辞書はフラッシュ上をそのまま読む）
+talk::JaDict jaDict;
+talk::EnDict enDict;
+talk::EnReader enReader;
+talk::TextReader* textReader = nullptr;
+
+// 音として出さない文字（空白・句読点・括弧）か
+bool isSilentChar(const char* s, size_t remaining) {
+  static const char* const kSilent[] = {
+      " ", "　", "\n", "\r", "\t", "、", "。", "，", "．", "！", "？", "!", "?", ",", ".",
+      "…", "「", "」", "『", "』", "（", "）", "(", ")", "・", "ー", "〜", "~", "-", ":", "："};
+  for (const char* m : kSilent) {
+    if (startsWith(s, remaining, m)) return true;
+  }
+  return false;
+}
+
 }  // namespace
 
 bool BuiltinVoice::begin() {
   ready_ = false;
+  moraReady_ = false;
   if (!LittleFS.begin(false)) {
     lastError_ = "LittleFS mount failed (run: pio run -t uploadfs)";
     return false;
@@ -157,9 +197,21 @@ bool BuiltinVoice::begin() {
 
   ready_ = true;
   lastError_ = "";
-  Serial.printf("[voice] builtin voice ready: %u clips, %s %luHz\n", count_,
-                codec_ == kCodecMulaw ? "mulaw" : "adpcm",
-                static_cast<unsigned long>(rate_));
+
+  // モーラの音（新しいボイスパック）と読み辞書がそろえば、どんな文章でも読める
+  const char kProbe[] = {kMoraHigh, '\xE3', '\x82', '\xA2', 0};  // "\x02ア"
+  const bool haveMorae = findKey(kProbe, strlen(kProbe)) >= 0;
+  const bool haveJa = jaDict.open(kJaDicStart, kJaDicEnd - kJaDicStart);
+  const bool haveEn = enDict.open(kEnDicStart, kEnDicEnd - kEnDicStart);
+  if (haveEn) enReader.setDict(&enDict);
+  if (haveMorae && haveJa) {
+    if (textReader == nullptr) textReader = new talk::TextReader(jaDict, enReader);
+    moraReady_ = true;
+  }
+  Serial.printf("[voice] builtin voice ready: %u clips, %s %luHz, free text %s\n",
+                count_, codec_ == kCodecMulaw ? "mulaw" : "adpcm",
+                static_cast<unsigned long>(rate_),
+                moraReady_ ? "on" : (haveMorae ? "off (dictionary)" : "off (old voice pack)"));
   return true;
 }
 
@@ -191,7 +243,7 @@ int BuiltinVoice::longestPlainKeyAt(const char* text, size_t remaining,
   *matched = 0;
   if (remaining == 0) return -1;
   const uint8_t first = static_cast<uint8_t>(text[0]);
-  if (first == '#' || first == '=') return -1;  // 数字用のキーは直接一致させない
+  if (first == '#' || first == '=' || first < 0x04) return -1;  // 数字・モーラ用のキーは直接一致させない
   int best = -1;
   for (uint16_t i = bucket_[first]; i < bucket_[first + 1]; ++i) {
     const Clip& c = clips_[i];
@@ -204,9 +256,10 @@ int BuiltinVoice::longestPlainKeyAt(const char* text, size_t remaining,
   return best;
 }
 
-void BuiltinVoice::addClip(std::vector<Step>& steps, int clip) const {
+void BuiltinVoice::addClip(std::vector<Step>& steps, int clip, bool join) const {
   if (clip < 0) return;
-  steps.push_back({static_cast<int16_t>(clip), 0});
+  steps.push_back({static_cast<int16_t>(clip), 0,
+                   join && !steps.empty() && steps.back().clip >= 0});
 }
 
 void BuiltinVoice::addPause(std::vector<Step>& steps, uint16_t ms) const {
@@ -215,7 +268,7 @@ void BuiltinVoice::addPause(std::vector<Step>& steps, uint16_t ms) const {
     steps.back().pauseMs = max(steps.back().pauseMs, ms);
     return;
   }
-  steps.push_back({-1, ms});
+  steps.push_back({-1, ms, false});
 }
 
 // 数字列 [begin, end) を読む。直後の単位（分・時間・% など）は促音・連濁を含めて
@@ -271,18 +324,26 @@ size_t BuiltinVoice::planNumber(const char* s, size_t n, size_t begin,
   return end;
 }
 
-void BuiltinVoice::plan(const String& text, std::vector<Step>& steps) const {
+size_t BuiltinVoice::planPhrases(const std::string& text,
+                                 std::vector<Step>& steps) const {
   const char* s = text.c_str();
-  const size_t n = text.length();
+  const size_t n = text.size();
+  size_t skipped = 0;
   size_t i = 0;
   while (i < n) {
     const uint8_t c = static_cast<uint8_t>(s[i]);
 
-    // 「ジョブ名」は読めないので「作品」と言い換える
+    // 「ジョブ名」: モーラで読めれば読み、読めなければ「作品」と言い換える
     if (startsWith(s + i, n - i, "「")) {
       const char* close = strstr(s + i, "」");
-      addClip(steps, findKey("作品", strlen("作品")));
-      i = close ? static_cast<size_t>(close - s) + strlen("」") : n;
+      const size_t open = i + strlen("「");
+      const size_t stop = close ? static_cast<size_t>(close - s) : n;
+      if (moraReady_) {
+        planSpeech(text.substr(open, stop - open), steps);
+      } else {
+        addClip(steps, findKey("作品", strlen("作品")));
+      }
+      i = close ? stop + strlen("」") : n;
       continue;
     }
 
@@ -319,15 +380,107 @@ void BuiltinVoice::plan(const String& text, std::vector<Step>& steps) const {
       i += markLen;
       continue;
     }
+    if (!isSilentChar(s + i, n - i)) ++skipped;
     i += utf8Length(c);  // 読めない文字は飛ばす
   }
-  if (!steps.empty() && steps.back().clip < 0) steps.pop_back();
+  return skipped;
+}
+
+void BuiltinVoice::planSpeech(const std::string& text, std::vector<Step>& steps) const {
+  if (textReader == nullptr) return;
+  talk::Utterance utterance;
+  textReader->read(text, utterance);
+  bool joinNext = false;
+  for (const talk::AccentPhrase& phrase : utterance) {
+    char vowel = 0;  // 長音「ー」でのばす母音
+    for (size_t i = 0; i < phrase.moras.size(); ++i) {
+      const talk::Mora& m = phrase.moras[i];
+      const std::string kana = talk::playableMora(m.kana);
+      if (kana == "ッ") {
+        addPause(steps, kSokuonMs);
+        joinNext = false;
+        continue;
+      }
+      const bool high = talk::moraIsHigh(phrase, i) ||
+                        (phrase.question && i + 1 == phrase.moras.size());
+      std::string name = kana;
+      if (kana == "ー") {
+        if (!vowel) continue;
+        name = talk::vowelKana(vowel);
+      } else {
+        const char v = talk::moraVowel(kana);
+        if (v) vowel = v;
+      }
+      int clip = -1;
+      if (m.devoiced) {
+        const std::string k = std::string(1, kMoraDevoiced) + name;
+        clip = findKey(k.c_str(), k.size());
+      }
+      if (clip < 0) {
+        const std::string k = std::string(1, high ? kMoraHigh : kMoraLow) + name;
+        clip = findKey(k.c_str(), k.size());
+      }
+      if (clip < 0 && name.size() > 3) {
+        // パックに無い組み合わせ（ヴュ など）は1字目と母音に分けて読む
+        const std::string first = std::string(1, high ? kMoraHigh : kMoraLow) + name.substr(0, 3);
+        addClip(steps, findKey(first.c_str(), first.size()), joinNext);
+        const char v = talk::moraVowel(name);
+        const std::string second = std::string(1, high ? kMoraHigh : kMoraLow) + talk::vowelKana(v);
+        clip = v ? findKey(second.c_str(), second.size()) : -1;
+        joinNext = true;
+      }
+      addClip(steps, clip, joinNext);
+      joinNext = true;
+    }
+    if (phrase.pauseAfterMs > 0) {
+      addPause(steps, phrase.pauseAfterMs);
+      joinNext = false;
+    }
+  }
+}
+
+void BuiltinVoice::plan(const String& text, std::vector<Step>& steps) {
+  // 文ごとに、セリフのクリップで全部読めるならそれを、読めないならモーラで読む
+  const std::string all(text.c_str(), text.length());
+  size_t start = 0;
+  while (start < all.size()) {
+    size_t end = start;
+    while (end < all.size()) {
+      size_t len = 0;
+      const uint16_t pause = pauseFor(all.c_str() + end, all.size() - end, &len);
+      // 3.14 や v2.3 の「.」は文の終わりではない
+      const bool decimalPoint = all[end] == '.' && end + 1 < all.size() &&
+                                isdigit(static_cast<unsigned char>(all[end + 1]));
+      if (pause >= kSentencePauseMs && len > 0 && !decimalPoint) {
+        end += len;
+        break;
+      }
+      end += utf8Length(static_cast<uint8_t>(all[end]));
+    }
+    const std::string sentence = all.substr(start, end - start);
+    std::vector<Step> phraseSteps;
+    const size_t skipped = planPhrases(sentence, phraseSteps);
+    if (skipped == 0 || !moraReady_) {
+      for (const Step& step : phraseSteps) {
+        if (step.clip < 0) {
+          addPause(steps, step.pauseMs);
+        } else {
+          steps.push_back(step);
+        }
+      }
+    } else {
+      planSpeech(sentence, steps);
+      addPause(steps, kSentencePauseMs);
+    }
+    start = end;
+  }
+  while (!steps.empty() && steps.back().clip < 0) steps.pop_back();
 }
 
 bool BuiltinVoice::speak(const String& text) {
   if (!ready_) return false;
   std::vector<Step> steps;
-  steps.reserve(32);
+  steps.reserve(64);
   plan(text, steps);
   bool hasClip = false;
   for (const Step& step : steps) hasClip |= step.clip >= 0;
@@ -338,14 +491,23 @@ bool BuiltinVoice::speak(const String& text) {
 
   Serial.printf("[voice] builtin: %u steps\n", static_cast<unsigned>(steps.size()));
   bool ok = true;
-  for (const Step& step : steps) {
+  bufferFill_ = 0;
+  tailLen_ = 0;
+  for (size_t k = 0; k < steps.size(); ++k) {
+    const Step& step = steps[k];
     if (step.clip < 0) {
       playSilence(step.pauseMs);
-    } else if (!playClip(clips_[step.clip])) {
+      continue;
+    }
+    // 次がつなげるモーラなら末尾を取っておいて重ねる
+    const bool holdTail = k + 1 < steps.size() && steps[k + 1].join;
+    if (!playClip(clips_[step.clip], step.join, holdTail)) {
       ok = false;
       break;
     }
   }
+  flushTail();
+  flushBuffer();
   while (M5.Speaker.isPlaying()) {
     if (service_) service_();
     delay(5);
@@ -370,17 +532,49 @@ void BuiltinVoice::submit(size_t sampleCount) {
   if (service_) service_();
 }
 
-bool BuiltinVoice::playClip(const Clip& clip) {
+// 書き込み中のバッファへサンプルを足し、いっぱいになったら再生に回す
+void BuiltinVoice::write(const int16_t* samples, size_t count) {
+  while (count > 0) {
+    const size_t n = min(count, kBufferSamples - bufferFill_);
+    memcpy(pcmBuffers[bufferIndex_] + bufferFill_, samples, n * sizeof(int16_t));
+    bufferFill_ += n;
+    samples += n;
+    count -= n;
+    if (bufferFill_ == kBufferSamples) {
+      submit(kBufferSamples);
+      bufferFill_ = 0;
+    }
+  }
+}
+
+void BuiltinVoice::flushTail() {
+  if (tailLen_ > 0) {
+    write(tailBuffer, tailLen_);
+    tailLen_ = 0;
+  }
+}
+
+void BuiltinVoice::flushBuffer() {
+  if (bufferFill_ > 0) {
+    submit(bufferFill_);
+    bufferFill_ = 0;
+  }
+}
+
+bool BuiltinVoice::playClip(const Clip& clip, bool join, bool holdTail) {
   if (!file_.seek(dataStart_ + clip.dataOffset)) {
     lastError_ = "voice pack seek failed";
     return false;
   }
-  uint32_t remaining = clip.samples;
+  if (!join) flushTail();
+  const size_t total = clip.samples;
+  const size_t hold = holdTail && total > kOverlapSamples * 2 ? kOverlapSamples : 0;
+  size_t done = 0;
   int predictor = clip.predictor;
   int stepIndex = clip.stepIndex;
-  while (remaining > 0) {
-    const size_t count = min<size_t>(remaining, kBufferSamples);
-    int16_t* out = pcmBuffers[bufferIndex_];
+  while (done < total) {
+    const size_t count = min<size_t>(total - done, kBufferSamples);
+    int16_t* out = decodeBuffer;
     if (codec_ == kCodecMulaw) {
       if (file_.read(rawBuffer, count) != count) {
         lastError_ = "voice pack read failed";
@@ -408,18 +602,39 @@ bool BuiltinVoice::playClip(const Clip& clip) {
         out[i] = static_cast<int16_t>(predictor);
       }
     }
-    submit(count);
-    remaining -= count;
+
+    // 前のモーラの末尾と重ねる（線形のクロスフェード）
+    if (done == 0 && join && tailLen_ > 0) {
+      const size_t n = min(tailLen_, count);
+      for (size_t i = 0; i < n; ++i) {
+        const int32_t w = static_cast<int32_t>((i + 1) * 256 / (n + 1));
+        out[i] = static_cast<int16_t>((tailBuffer[i] * (256 - w) + out[i] * w) / 256);
+      }
+      tailLen_ = 0;
+    }
+    // 最後の数 ms（[total - hold, total)）は次のモーラと重ねるために取っておく
+    size_t end = count;
+    if (hold > 0 && done + count > total - hold) {
+      const size_t holdStart = total - hold;
+      const size_t local = holdStart > done ? holdStart - done : 0;  // このかたまりの中の位置
+      const size_t offset = done + local - holdStart;                 // tailBuffer の中の位置
+      memcpy(tailBuffer + offset, out + local, (count - local) * sizeof(int16_t));
+      tailLen_ = offset + (count - local);
+      end = local;
+    }
+    write(out, end);
+    done += count;
   }
   return true;
 }
 
 void BuiltinVoice::playSilence(uint16_t ms) {
+  flushTail();
+  static const int16_t kZeros[256] = {};
   uint32_t remaining = rate_ * ms / 1000;
   while (remaining > 0) {
-    const size_t count = min<size_t>(remaining, kBufferSamples);
-    memset(pcmBuffers[bufferIndex_], 0, count * sizeof(int16_t));
-    submit(count);
-    remaining -= count;
+    const size_t n = min<uint32_t>(remaining, 256);
+    write(kZeros, n);
+    remaining -= n;
   }
 }

@@ -715,9 +715,11 @@ String ConfigPortal::pageHtml(const String& message) {
           ">内蔵ボイス（本体だけで喋る・オフライン）</option>";
   html += F("</select></label><p class='hint'>");
   if (runtimeStatus_.voiceClips > 0) {
-    html += "内蔵ボイス: " + String(runtimeStatus_.voiceClips) +
-            " フレーズ書き込み済み。サーバーを選んでいても、つながらないときは"
-            "自動で内蔵ボイスに切り替わります。";
+    html += "内蔵ボイス: " + String(runtimeStatus_.voiceClips) + " クリップ書き込み済み" +
+            String(runtimeStatus_.voiceFreeText
+                       ? "（日本語・英語のどんな文章も読めます）"
+                       : "（実況の文章だけ。どんな文章も読むにはボイスパックを作り直して書き込む）") +
+            "。サーバーを選んでいても、つながらないときは自動で内蔵ボイスに切り替わります。";
   } else {
     html += F("内蔵ボイスは未書き込みです（tools/make_voice_pack.py → "
               "pio run -t uploadfs）。");
@@ -873,7 +875,8 @@ String ConfigPortal::statusHtml() {
           htmlEscape(config_.ttsSpeaker) + "</td></tr>";
   html += String("<tr><td>内蔵ボイス</td><td class='") +
           (runtimeStatus_.voiceClips > 0
-               ? "ok'>" + String(runtimeStatus_.voiceClips) + " フレーズ"
+               ? "ok'>" + String(runtimeStatus_.voiceClips) + " クリップ" +
+                     (runtimeStatus_.voiceFreeText ? "（どんな文章も読める）" : "（実況のみ）")
                : String("warn'>未書き込み")) +
           "</td></tr>";
   html += F("</table></section>");
