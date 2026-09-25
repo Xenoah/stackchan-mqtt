@@ -89,6 +89,9 @@ class AvatarFaceController {
   // アバターの描画タスクを再開する
   void resumeDrawing();
 
+  // 顔の描画タスクのスタックの残り（今までで最も少なかったときのバイト数。監視用）
+  uint32_t drawStackFree() const;
+
   // 全パラメータをデフォルト（Neutral表情・Default顔・Default色）に戻す
   void resetToDefault();
 
@@ -150,6 +153,9 @@ class AvatarFaceController {
   uint32_t defaultReturnAt_ = 0;  // デフォルトに戻る時刻（0=タイマーなし）
   uint32_t nextBlinkAt_ = 0;      // 次にまばたきを開始する時刻
   uint32_t blinkOpenAt_ = 0;      // まばたき後に目を開ける時刻
+
+  // m5stack-avatar の描画タスク（スタック 2KB 固定）を、スタックの大きい自前のタスクに差し替える
+  void replaceDrawTask();
 
   // 7種類の顔型オブジェクトを生成してfaces_[]に格納する
   void initializeFaces();

@@ -50,6 +50,9 @@ class BambuMqttClient {
   // チャンバーライトの ON/OFF を要求する
   void requestChamberLight(bool on);
 
+  // MQTT タスクのスタックの残り（最も少なかったときのバイト数。監視用、未起動なら 0）
+  uint32_t stackFree() const;
+
  private:
   static void taskEntry(void* arg);
   void taskLoop();
@@ -64,6 +67,7 @@ class BambuMqttClient {
 
   BambuConfig config_;
   bool enabled_ = false;
+  TaskHandle_t task_ = nullptr;
 
   WiFiClientSecure tls_;
   PubSubClient mqtt_{tls_};

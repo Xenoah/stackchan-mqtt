@@ -99,6 +99,43 @@ namespace m5avatar {
 extern TaskHandle_t drawTaskHandle;
 }  // namespace m5avatar
 
+namespace {
+
+// 顔の描画タスクのスタック。m5stack-avatar の drawLoop は 2KB しかなく、
+// 顔の上に HUD（日本語の字幕・温度など）を描くとあふれて再起動していた
+constexpr uint32_t kFaceDrawStackBytes = 8192;
+
+// m5stack-avatar の drawLoop と同じく、描いては 10ms 待つ
+void faceDrawTask(void* arg) {
+  auto* avatar = static_cast<m5avatar::Avatar*>(arg);
+  for (;;) {
+    avatar->draw();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
+// 描画タスクがフレームを描き終えて待ち（Blocked）に入ったところで止める。
+// 確認から停止までの間に割り込まれないよう、この間だけ自分（同じコアのメインループ）の
+// 優先度を上げる。
+void suspendBetweenFrames(TaskHandle_t task) {
+  const UBaseType_t priority = uxTaskPriorityGet(nullptr);
+  const uint32_t startedAt = millis();
+  while (true) {
+    vTaskPrioritySet(nullptr, configMAX_PRIORITIES - 1);
+    const eTaskState state = eTaskGetState(task);
+    const bool between = state == eBlocked || state == eSuspended;
+    if (between || millis() - startedAt > 500) {
+      vTaskSuspend(task);
+      vTaskPrioritySet(nullptr, priority);
+      return;
+    }
+    vTaskPrioritySet(nullptr, priority);
+    vTaskDelay(1);  // 描きかけのフレームを描き終えてもらう
+  }
+}
+
+}  // namespace
+
 // アバターを初期化する。
 // 重要: avatar_.init()（描画タスク起動）はセッターより先に呼ぶ必要がある。
 // 先にセッターを呼ぶと描画タスクのハンドルがnullのまま内部でsuspend()が呼ばれ、
@@ -122,11 +159,7 @@ void AvatarFaceController::begin() {
   // （見た目は StackChan 本来の2トーン表示。パレットの前景/背景色は反映される）。
   avatar_.init(1);            // 描画タスク起動（1bit スプライトで省メモリ・安定）
   started_ = true;
-  // 顔の描画はメインループ（優先度1）より後回しにする。メニュー・設定画面・
-  // タッチの処理を先に済ませ、顔は空いた時間に描く
-  if (m5avatar::drawTaskHandle != nullptr) {
-    vTaskPrioritySet(m5avatar::drawTaskHandle, 0);
-  }
+  replaceDrawTask();
 
   // 初期状態を全パラメータに適用する
   applyFace();
@@ -333,25 +366,30 @@ void AvatarFaceController::pauseDrawing() {
     return;
   }
   drawingPaused_ = true;
-  TaskHandle_t task = m5avatar::drawTaskHandle;
-  if (task == nullptr) return;
-  // 描画タスクはフレームを描いてから vTaskDelay で待つ。待ち（Blocked）に入った
-  // ところで止める。確認から停止までの間に割り込まれないよう、この間だけ
-  // 自分（同じコアのメインループ）の優先度を上げる。
-  const UBaseType_t priority = uxTaskPriorityGet(nullptr);
-  const uint32_t startedAt = millis();
-  while (true) {
-    vTaskPrioritySet(nullptr, configMAX_PRIORITIES - 1);
-    const eTaskState state = eTaskGetState(task);
-    const bool between = state == eBlocked || state == eSuspended;
-    if (between || millis() - startedAt > 500) {
-      vTaskSuspend(task);
-      vTaskPrioritySet(nullptr, priority);
-      return;
-    }
-    vTaskPrioritySet(nullptr, priority);
-    vTaskDelay(1);  // 描きかけのフレームを描き終えてもらう
+  if (m5avatar::drawTaskHandle != nullptr) {
+    suspendBetweenFrames(m5avatar::drawTaskHandle);
   }
+}
+
+void AvatarFaceController::replaceDrawTask() {
+  TaskHandle_t library = m5avatar::drawTaskHandle;
+  if (library == nullptr) return;
+  suspendBetweenFrames(library);  // フレームの途中（LCD をつかんだまま）では消さない
+  // 顔の描画はメインループ（優先度1）より後回し（優先度0）にする。メニュー・設定画面・
+  // タッチの処理を先に済ませ、顔は空いた時間に描く。ハンドルは m5stack-avatar の
+  // suspend()/resume()（setExpression が使う）からもこのタスクを指すよう差し替える
+  TaskHandle_t task = nullptr;
+  if (xTaskCreatePinnedToCore(faceDrawTask, "faceDraw", kFaceDrawStackBytes, &avatar_,
+                              0, &task, APP_CPU_NUM) != pdPASS) {
+    vTaskResume(library);  // 作れなければライブラリのタスクのまま
+    return;
+  }
+  m5avatar::drawTaskHandle = task;
+  vTaskDelete(library);
+}
+
+uint32_t AvatarFaceController::drawStackFree() const {
+  return m5avatar::drawTaskHandle ? uxTaskGetStackHighWaterMark(m5avatar::drawTaskHandle) : 0;
 }
 
 // アバターの描画タスクを再開する

@@ -145,7 +145,7 @@ void BambuMqttClient::begin(const BambuConfig& config) {
   });
 
   xTaskCreatePinnedToCore(taskEntry, "bambu_mqtt", kTaskStackBytes, this, 1,
-                          nullptr, 0);
+                          &task_, 0);
   Serial.printf("[bambu] monitor started host=%s serial=%s\n",
                 config_.host.c_str(), config_.serial.c_str());
 }
@@ -449,4 +449,8 @@ void BambuMqttClient::commit() {
   shared_ = work_;
   xSemaphoreGive(mutex_);
   revision_++;
+}
+
+uint32_t BambuMqttClient::stackFree() const {
+  return task_ ? uxTaskGetStackHighWaterMark(task_) : 0;
 }

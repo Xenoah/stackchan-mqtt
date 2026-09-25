@@ -943,10 +943,14 @@ void serviceApp() {
   // free が徐々に減る=リーク、free に対し max-alloc が極端に小さい=断片化。
   static uint32_t lastHeapLogAt = 0;
   if (now - lastHeapLogAt >= 15000) {
-    Serial.printf("[heap] free=%u min=%u maxblk=%u psram=%u\n",
+    // スタックの残り（最も少なかったとき）: 顔の描画・メインループ・MQTT
+    Serial.printf("[heap] free=%u min=%u maxblk=%u psram=%u stack face=%u loop=%u mqtt=%u\n",
                   (unsigned)freeHeapNow, (unsigned)minFreeHeapEver,
                   (unsigned)ESP.getMaxAllocHeap(),
-                  (unsigned)ESP.getFreePsram());
+                  (unsigned)ESP.getFreePsram(),
+                  (unsigned)avatarFace.drawStackFree(),
+                  (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                  (unsigned)bambu.stackFree());
     lastHeapLogAt = now;
   }
 }
