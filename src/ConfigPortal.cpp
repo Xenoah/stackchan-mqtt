@@ -167,6 +167,55 @@ void ConfigPortal::setCommentaryVoice(bool enabled) {
   preferences_.end();
 }
 
+bool ConfigPortal::testWifi(const String& ssid, const String& password,
+                           uint32_t timeoutMs,
+                           const std::function<void()>& service) {
+  // セットアップ AP・設定用 AP は残したまま STA だけつなぎ替える
+  WiFi.mode(portalActive_ || settingsApActive_ ? WIFI_AP_STA : WIFI_STA);
+  WiFi.disconnect(false, false);
+  delay(100);
+  WiFi.begin(ssid.c_str(), password.c_str());
+  const uint32_t startedAt = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startedAt < timeoutMs) {
+    if (service) service();
+    delay(20);
+  }
+  const bool ok = WiFi.status() == WL_CONNECTED;
+  if (!ok) {
+    WiFi.disconnect(false, false);
+    // 元の Wi-Fi に戻す（セットアップ AP 中は元の接続が無いのでそのまま）
+    if (!portalActive_ && !config_.wifiSsid.isEmpty()) {
+      delay(100);
+      WiFi.begin(config_.wifiSsid.c_str(), config_.wifiPassword.c_str());
+    }
+  }
+  Serial.printf("[setup] wifi test %s: %s\n", ssid.c_str(), ok ? "ok" : "failed");
+  return ok;
+}
+
+void ConfigPortal::saveWifi(const String& ssid, const String& password) {
+  config_.wifiSsid = ssid;
+  config_.wifiPassword = password;
+  save();
+}
+
+void ConfigPortal::saveBambu(bool enabled, const String& host,
+                             const String& serial, const String& accessCode,
+                             bool autoMode) {
+  config_.bambuEnabled = enabled;
+  config_.bambuHost = host;
+  config_.bambuHost.trim();
+  config_.bambuSerial = serial;
+  config_.bambuSerial.trim();
+  config_.bambuSerial.toUpperCase();
+  if (!accessCode.isEmpty()) {
+    config_.bambuAccessCode = accessCode;
+    config_.bambuAccessCode.trim();
+  }
+  config_.autoPrinterMode = autoMode;
+  save();
+}
+
 // SETTINGSメニューを開いたときに呼ぶ。
 // 既存のWiFi接続（STA）を切断せず、AP_STAモードで追加APを起動する。
 void ConfigPortal::startSettingsAp() {

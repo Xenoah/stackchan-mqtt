@@ -208,6 +208,16 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 | G3 | 実況の出し分け | MQTT モード以外では Low の実況を `remember()` だけして喋らない | ✅ |
 | G4 | メニュー・Web | メニュー3列（1段目がモード、注記は `lgfxJapanGothicP_12`）。`POST /api/mode` は `pendingModeRequest` に積むだけで loop が切り替える。ダッシュボードにモード表示と切り替えボタン | ✅ |
 
+## Part H: 本体のキーボードで Wi-Fi・MQTT を設定（2026-09-25 / v2.2.0）
+
+| # | 項目 | 内容 | 状態 |
+|---|------|------|------|
+| H1 | タッチキーボード | `TouchKeyboard`: `runTouchKeyboard(canvas, value, options, service)`（ブロッキング、入力中も `service()`=`serviceApp` を呼ぶ）。英字/記号/数字キーパッドの3ページ、⇧ 1回=次の1文字、2回=大文字固定。⌫ 長押しで連続削除。伏せ字は最後の1文字を1秒見せる。キーは 10 ユニット幅の行で定義（`buildLayout()`） | ✅ |
+| H2 | Wi-Fi 画面 | `runWifiSetup()`: 非同期スキャン（`scanNetworks(true)`）→ SSID ごとに最強の電波でまとめて強い順 → パスワード → `ConfigPortal::testWifi()`（15秒、失敗したら元の Wi-Fi へつなぎ直す）→ `saveWifi()` → 再起動。保存済み SSID でパスワード空なら保存済みを使う | ✅ |
+| H3 | プリンター画面 | `runPrinterSetup()`: 監視・IP（数字キー）・シリアル（大文字固定）・アクセスコード（伏せ字、空なら保存済みを残す）・自動 MQTT。`saveBambu()` → 再起動 | ✅ |
+| H4 | 組み込み | メニュー3×3に「Wi-Fi」「MQTT 設定」。`openDeviceSetup()` はメニューから顔の描画を止めたまま画面を切り替え、`deviceSetupOpen` の間は首を動かさない。セットアップ AP 中は loop が `handleSetupPortalTouch()`（タップで Wi-Fi 画面）。SSID 未設定の初回起動は自動で Wi-Fi 画面 | ✅ |
+| H5 | 共通部品 | `SetupUi.h`: 色・`Button`・`TouchTracker`（押下表示と離したときの確定）・`fitText()` | ✅ |
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。
@@ -225,3 +235,4 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
   ファーム build 成功（RAM 19.5%, Flash 22.8%）。Gateway `__SAY__` は TestClient で確認。
 - 2026-09-24: 内蔵ボイス（Part F）。VOICEVOX でボイスパックを作り LittleFS へ焼き、TTS サーバーなしで実況できるようにした。
 - 2026-09-25: 印刷開始で MQTT モードへ自動切り替え（Part G）。ビルド成功（RAM 21.9%, Flash 52.6% / app 3MB）。v2.1.0 プレリリース。
+- 2026-09-25: 本体のタッチキーボードで Wi-Fi・MQTT を設定（Part H）。画面は PIL のモックで配置を確認。ビルド成功（Flash 53.6%）。v2.2.0 プレリリース。

@@ -27,6 +27,8 @@
 #include "PrintCommentator.h"
 #include "PrinterJson.h"
 #include "PrinterScreen.h"
+#include "SetupScreens.h"
+#include "SetupUi.h"
 #include "Version.h"
 #include "VoiceVoxClient.h"
 #include "hardware_features.h"
@@ -252,7 +254,9 @@ enum class ModeMenuButton {
   Voice,     // 実況の声 ON/OFF
   LocalLlm,  // LOCAL LLMモードに切り替え
   LevelHold, // LEVEL HOLDモードに切り替え
-  Settings,  // 設定画面を開く
+  Settings,  // 接続情報（URL・設定用ホットスポット）を開く
+  WifiSetup,    // 本体のキーボードで Wi-Fi を設定
+  PrinterSetup, // 本体のキーボードでプリンター（MQTT）を設定
   Close,     // メニューを閉じる
 };
 
@@ -394,6 +398,7 @@ int bodyJoyCenterPitch = 0;
 // メニューとSettings情報画面の状態変数
 bool modeMenuOpen = false;          // モードメニューが開いているかどうか
 bool settingsInfoOpen = false;      // SETTINGS情報画面が開いているかどうか
+bool deviceSetupOpen = false;       // 本体の設定画面（キーボード）を表示中か
 bool displayWasTouching = false;    // 前フレームでタッチされていたかどうか
 int16_t displayTouchStartX = 0;     // スワイプ開始X座標
 int16_t displayTouchStartY = 0;     // スワイプ開始Y座標
@@ -462,6 +467,7 @@ bool bodyMotionCanUseServo() {
          !configPortal.isPortalActive() &&
          !modeMenuOpen &&
          !settingsInfoOpen &&
+         !deviceSetupOpen &&
          !speaking;
 }
 
@@ -1424,6 +1430,7 @@ constexpr ModeMenuButton kMenuOrder[] = {
     ModeMenuButton::PrinterMode, ModeMenuButton::LocalLlm,
     ModeMenuButton::LevelHold,   ModeMenuButton::Printer,
     ModeMenuButton::Voice,       ModeMenuButton::Settings,
+    ModeMenuButton::WifiSetup,   ModeMenuButton::PrinterSetup,
     ModeMenuButton::Close,
 };
 constexpr int16_t kMenuColumns = 3;
@@ -1517,9 +1524,21 @@ void drawModeMenu(ModeMenuButton pressed) {
         accent = display.color565(56, 189, 248);
         break;
       case ModeMenuButton::Settings:
-        title = "設定";
-        note = "Web で開く";
+        title = "接続情報";
+        note = "URL・AP";
         accent = display.color565(192, 132, 252);
+        break;
+      case ModeMenuButton::WifiSetup:
+        title = "Wi-Fi";
+        note = configPortal.isConnected() ? WiFi.SSID() : String("未接続");
+        accent = display.color565(45, 212, 191);
+        break;
+      case ModeMenuButton::PrinterSetup:
+        title = "MQTT 設定";
+        note = configPortal.config().bambuHost.isEmpty()
+                   ? String("未設定")
+                   : configPortal.config().bambuHost;
+        accent = display.color565(251, 146, 60);
         break;
       default:
         title = "閉じる";
@@ -1551,7 +1570,7 @@ void drawModeMenu(ModeMenuButton pressed) {
     display.drawString(title, x + 10, y + 11);
     display.setFont(&fonts::lgfxJapanGothicP_12);
     display.setTextColor(isPressed ? bg : sub, fill);
-    display.drawString(note, x + 10, y + 36);
+    display.drawString(setupui::fitText(display, note, w - 14), x + 10, y + 36);
   }
   display.pushSprite(0, 0); // キャンバスを画面に転送（フリッカーフリー）
 }
@@ -1656,6 +1675,65 @@ void closeSettingsInfo() {
   avatarFace.resetToDefault();
 }
 
+// 本体の設定画面（Wi-Fi・プリンター）を開く。保存したら再起動する。
+// メニューから来たときは顔の描画を止めたまま切り替える（再開直後に止めないため）。
+using DeviceSetupScreen = bool (*)(M5Canvas&, ConfigPortal&,
+                                   const std::function<void()>&);
+void showSetupPortalStatus();
+
+void openDeviceSetup(DeviceSetupScreen screen) {
+  const bool fromMenu = modeMenuOpen;
+  modeMenuOpen = false;
+  modeMenuPressed = ModeMenuButton::None;
+  deviceSetupOpen = true;
+  if (!fromMenu) {
+    avatarFace.pauseDrawing();
+    delay(20);
+  }
+  const bool saved = screen(startupCanvas(), configPortal, serviceApp);
+  if (saved) {
+    Serial.println("[setup] saved on device, restarting");
+    delay(300);
+    ESP.restart();
+  }
+  deviceSetupOpen = false;
+  displayWasTouching = false;
+  avatarFace.resumeDrawing();
+  avatarFace.resetToDefault();
+  if (configPortal.isPortalActive()) showSetupPortalStatus();
+}
+
+// セットアップ AP 中の顔の表示。吹き出しは約18文字までなので、
+// 「画面タップで設定」と「Web の設定画面」を3秒ごとに交互に出す。
+uint32_t setupPortalStatusAt = 0;
+bool setupPortalStatusAlt = false;
+
+void showSetupPortalStatus() {
+  setupPortalStatusAt = millis();
+  setupPortalStatusAlt = false;
+  avatarFace.showStatus("TAP: WIFI SETUP", 0);
+}
+
+// セットアップ AP 中（Wi-Fi 未接続）の画面タッチ: タップで Wi-Fi 設定を開く
+void handleSetupPortalTouch() {
+  const uint32_t now = millis();
+  if (now - setupPortalStatusAt >= 3000) {
+    setupPortalStatusAt = now;
+    setupPortalStatusAlt = !setupPortalStatusAlt;
+    avatarFace.showStatus(
+        setupPortalStatusAlt ? "SETUP: 192.168.4.1" : "TAP: WIFI SETUP", 0);
+  }
+  int16_t x = 0;
+  int16_t y = 0;
+  const bool touching = M5.Display.getTouch(&x, &y);
+  if (!touching && displayWasTouching) {
+    displayWasTouching = false;
+    openDeviceSetup(runWifiSetup);
+    return;
+  }
+  displayWasTouching = touching;
+}
+
 // メニューを開く。アバターの描画を一時停止して画面を上書きする。
 void openModeMenu() {
   if (modeMenuOpen) {
@@ -1716,6 +1794,15 @@ bool handleDisplayTouch() {
     }
     if (!touching && displayWasTouching) {
       const ModeMenuButton selected = modeMenuPressed;
+      // 本体の設定画面へ（プリンター未設定でプリンター系を押したときもこちら）
+      const bool printerSetup =
+          selected == ModeMenuButton::PrinterSetup ||
+          (!bambu.isEnabled() && (selected == ModeMenuButton::Printer ||
+                                  selected == ModeMenuButton::PrinterMode));
+      if (selected == ModeMenuButton::WifiSetup || printerSetup) {
+        openDeviceSetup(printerSetup ? runPrinterSetup : runWifiSetup);
+        return true;
+      }
       if (selected == ModeMenuButton::Printer && bambu.isEnabled()) {
         // 顔の描画を再開せずにメニューから詳細画面へ直接切り替える
         // （再開直後の一時停止で描画タスクをフレーム途中で止めないため）
@@ -1727,10 +1814,7 @@ bool handleDisplayTouch() {
         return true;
       }
       closeModeMenu(); // メニューを閉じてからモードを切り替える
-      if (selected == ModeMenuButton::Printer ||
-          (selected == ModeMenuButton::PrinterMode && !bambu.isEnabled())) {
-        avatarFace.showStatus("PRINTER: SETUP ON WEB", 2500);
-      } else if (selected == ModeMenuButton::PrinterMode) {
+      if (selected == ModeMenuButton::PrinterMode) {
         selectModeManually(AppMode::Printer);
       } else if (selected == ModeMenuButton::Voice) {
         const bool voice = !configPortal.config().commentaryVoice;
@@ -2122,10 +2206,14 @@ void setup() {
     Serial.printf("Setup AP: %s, http://192.168.4.1\n",
                   configPortal.accessPointName().c_str());
     avatarFace.resetToDefault();
-    avatarFace.showStatus("SETUP: 192.168.4.1", 0); // 常時表示
+    showSetupPortalStatus(); // 常時表示
     showStatusLed(48, 32, 0); // 橙色LED: セットアップ待ち
     greetOnBoot();
-    return; // ループに入る（APモードではメニューは使えない）
+    // はじめての起動（Wi-Fi 未設定）は、そのまま本体の Wi-Fi 設定画面を開く
+    if (configPortal.config().wifiSsid.isEmpty()) {
+      openDeviceSetup(runWifiSetup);
+    }
+    return; // ループに入る（APモードでは画面タップで Wi-Fi 設定を開ける）
   }
 
   // WiFi接続成功
@@ -2150,9 +2238,10 @@ void setup() {
 void loop() {
   serviceApp(); // 全サブシステムの更新
 
-  // APセットアップモード中はタッチ・ボタン処理をスキップする
-  // （ループ内でWebサーバの応答のみ行う）
+  // APセットアップモード中は、画面タップで本体の Wi-Fi 設定を開く以外の操作はしない
+  // （Web の設定画面 http://192.168.4.1 も使える）
   if (configPortal.isPortalActive()) {
+    handleSetupPortalTouch();
     delay(5);
     return;
   }

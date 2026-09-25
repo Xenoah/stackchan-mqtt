@@ -146,6 +146,21 @@ class ConfigPortal {
   // 実況の音声 ON/OFF を変更して NVS に保存する（再起動不要）
   void setCommentaryVoice(bool enabled);
 
+  // --- 本体の設定画面（タッチキーボード）用 ---
+
+  // 指定の Wi-Fi に実際につないでみる（最大 timeoutMs、待つ間 service を呼ぶ）。
+  // つながらなければ元の Wi-Fi へつなぎ直す。戻り値: つながった=true
+  bool testWifi(const String& ssid, const String& password, uint32_t timeoutMs,
+                const std::function<void()>& service);
+
+  // Wi-Fi の接続先を NVS に保存する（反映は再起動後）
+  void saveWifi(const String& ssid, const String& password);
+
+  // プリンター（MQTT）の設定を NVS に保存する（反映は再起動後）。
+  // accessCode が空なら保存済みのアクセスコードを残す。
+  void saveBambu(bool enabled, const String& host, const String& serial,
+                 const String& accessCode, bool autoMode);
+
  private:
   Preferences preferences_;          // ESP32 NVS（不揮発ストレージ）アクセス
   WebServer server_{80};             // ポート80のHTTPサーバ
