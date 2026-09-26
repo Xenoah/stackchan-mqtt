@@ -406,7 +406,10 @@ python -m esptool --chip esp32s3 --port COM4 --baud 921600 read-flash 0xFF0000 0
   `.pio/libdeps` の手編集だけに依存しない。BSPを更新するときはこのスクリプトも見直す。
 - 生の位置が有効範囲0〜1000から外れたら、角度へ変換せず基底 `Servo::getCurrentAngle()`
   の現在のアニメーション推定位置を返す。実測の正常な左端・右端はそのまま利用可能。
+  `CORE_DEBUG_LEVEL=2` 以上のデバッグビルドでは、
   `invalid position ... retaining motion estimate` を初回と最大5秒に1回記録する。
+  通常の公開ビルドではBSPのESP_LOGWは省略される。警告が無いことを通信失敗0の根拠にしない。
+  不正値の除外処理は公開ビルドでも有効。
 - `startBodyMotion()` は既にIdle/Joyなら何も再初期化せずreturn。
   `[motion] retained on mode change: target=(...)` でモード間の引継ぎを記録する。
 - 停止状態からの開始時だけ実測位置へ同期し、その後はAutoAngleSyncをOFFにする。
@@ -448,3 +451,5 @@ python -m esptool --chip esp32s3 --port COM4 --baud 921600 read-flash 0xFF0000 0
   firmware.binのSHA256は `e6361cd8de1b067457399b5e582e2ee80038f91bb47df10664bf393c89567612`。
   通常更新ではfirmware.binのみを0x10000へ書く。NVS・LittleFSの変更は不要。
   公開先: `https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.4.1`。
+- 公開完了。タグの対象は `740be2d`。全7ファイルのGitHub側SHA256をローカルと照合して一致。
+  その後、公開ビルドではBSP警告ログが省略される点を文書へ補足した（ファーム変更なし）。
