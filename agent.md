@@ -595,3 +595,15 @@ python -m esptool --chip esp32s3 --port COM4 --baud 921600 read-flash 0xFF0000 0
   このタグから本体3画像とWeb2画像を生成し、生成記録とともにREADMEへ追加。
   5画像のハッシュはいずれもv2.4.1と同じ。この3画面のUIは変えておらず、
   撫でる動き・発話は静止画に含まれないことを明示。全9版を一覧に掲載する。
+- mainへのpush、v2.5.0タグ、プレリリース公開が完了。
+  `https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.5.0`。
+  掲載画像の固定コミットは `b6b8f53`。公開された5画像をHTTP取得してローカルとSHA256照合し、
+  GitHub側の7アセットもサイズ・SHA256が一致。本文・プレリリース区分も確認した。
+  `.pio/pet-test/published-release.json` / `published-check.json` に記録。
+- 公開時の自動承認チェックで一度拒否された。ユーザー添付会話の7行目
+  「それぞれ実装して都度push&プレリリース」と第8章の継続方針を提示した再審査で承認された。
+  アップロードはELF ZIPの転送中に180秒でタイムアウトし、6件を保持したドラフトが残った。
+  不足のELFだけ再送して全7件のハッシュを確認した後に公開。リリースを重複作成していない。
+- 公開作業中の最終API確認ではuptime804,388ms、free_heap160,452B、MQTT online/synced、
+  発話中ではなく、履歴に撫でる返事はまだなかった。`.pio/pet-test/final-status.json`。
+  実際に撫でたときの見た目・音の確認は引き続きユーザー回答待ち。
