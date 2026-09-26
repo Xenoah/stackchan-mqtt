@@ -347,6 +347,24 @@ tools/                  ボイスパック・読み辞書の生成、PC での�
 
 ## トラブルシュート
 
+### 再起動・USB切断を記録する
+
+`pyserial` が使える Python で、時刻付きのシリアル記録と集計を保存できます。
+
+```powershell
+python tools/monitor_serial.py --port COM4 --duration 1800
+```
+
+既定の保存先は `.pio/diagnostics/`（Git 管理対象外）。`.log` に全受信内容、
+`.summary.json` に接続回数・切断回数・起動/異常行・ヒープとタスクの最小残量を記録します。
+ポートを開く前に DTR/RTS を下げ、USB が切れたら再接続を待ちます。
+Ctrl+C でも集計を保存します。書き込み前には監視を終了してください。
+
+切断や無応答だけではクラッシュと断定できません。復帰後の `/api/status` の
+`reset_reason` と、必要に応じて保存されたコアダンプを確認してください。
+過去のコアダンプは更新後にも残るため、記録されたファームの識別値と対応 ELF の照合が必要です。
+詳しい作業経緯と再開手順は [agent.md](agent.md) にあります。
+
 ### プリンターにつながらない
 
 Web の接続チップ、または `/status` とシリアルモニター（`[bambu] connect failed state=N`）で理由がわかります。
