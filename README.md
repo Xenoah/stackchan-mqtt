@@ -15,32 +15,33 @@ v2.5.0では、頭を撫でると笑顔で首を振り、うなずきながら�
 
 ## スクリーンショット
 
-### スタックチャン本体（v2.4.1）
+### スタックチャン本体（v2.5.0）
 
 各タグの本体描画コードとフォントを使って、PC上で生成した**画面再現イメージ**です。
-320×240ピクセル、v2.4.1の8bit配色を反映しています。印刷状況と入力値はサンプルです。
+320×240ピクセル、v2.5.0の8bit配色を反映しています。印刷状況と入力値はサンプルです。
+この3画面の見た目はv2.4.1と共通です。撫でたときの動き・発話は静止画には含まれません。
 
 | プリンター詳細 | メニュー |
 | --- | --- |
-| ![v2.4.1 本体のプリンター詳細画面の再現イメージ](docs/screenshots/v2.4.1/device-printer.png) | ![v2.4.1 本体メニューの再現イメージ](docs/screenshots/v2.4.1/device-menu.png) |
+| ![v2.5.0 本体のプリンター詳細画面の再現イメージ](docs/screenshots/v2.5.0/device-printer.png) | ![v2.5.0 本体メニューの再現イメージ](docs/screenshots/v2.5.0/device-menu.png) |
 
 **本体のタッチキーボード（Wi-Fi設定）**
 
-![v2.4.1 本体のWi-Fiパスワード入力画面の再現イメージ](docs/screenshots/v2.4.1/device-keyboard.png)
+![v2.5.0 本体のWi-Fiパスワード入力画面の再現イメージ](docs/screenshots/v2.5.0/device-keyboard.png)
 
 [各版の本体画面と変化・生成方法](docs/screenshots/README.md)
 
 <details>
 <summary>Web ダッシュボード（PC・スマートフォン）</summary>
 
-v2.4.1のWeb画面をサンプルデータで表示して撮影しています。画像をクリックすると原寸で開きます。
-**v2.1.0〜v2.4.1はWeb画面のソースが同じため、同じデータでは画像も同一です。**
+v2.5.0のWeb画面をサンプルデータで表示して撮影しています。画像をクリックすると原寸で開きます。
+**v2.1.0〜v2.5.0はWeb画面のソースが同じため、同じデータでは画像も同一です。**
 
 <table>
 <tr><th>PC</th><th>スマートフォン</th></tr>
 <tr>
-<td valign="top"><a href="docs/screenshots/v2.4.1/web-desktop.png"><img src="docs/screenshots/v2.4.1/web-desktop.png" width="520" alt="v2.4.1 PC版Webダッシュボード：印刷62%、温度、AMS、実況ログ"></a></td>
-<td valign="top"><a href="docs/screenshots/v2.4.1/web-mobile.png"><img src="docs/screenshots/v2.4.1/web-mobile.png" width="230" alt="v2.4.1 スマートフォン版Webダッシュボード：進捗リングと縦並びのカード"></a></td>
+<td valign="top"><a href="docs/screenshots/v2.5.0/web-desktop.png"><img src="docs/screenshots/v2.5.0/web-desktop.png" width="520" alt="v2.5.0 PC版Webダッシュボード：印刷62%、温度、AMS、実況ログ"></a></td>
+<td valign="top"><a href="docs/screenshots/v2.5.0/web-mobile.png"><img src="docs/screenshots/v2.5.0/web-mobile.png" width="230" alt="v2.5.0 スマートフォン版Webダッシュボード：進捗リングと縦並びのカード"></a></td>
 </tr>
 </table>
 

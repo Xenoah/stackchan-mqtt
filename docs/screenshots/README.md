@@ -23,6 +23,7 @@ M5GFXの実際の描画処理と内蔵フォントで320×240の画像を生成�
 
 | リリース | プリンター詳細 | メニュー | キーボード | 生成記録 |
 | --- | --- | --- | --- | --- |
+| v2.5.0 | [画像](v2.5.0/device-printer.png) | [画像](v2.5.0/device-menu.png) | [画像](v2.5.0/device-keyboard.png) | [記録](v2.5.0/device-capture.json) |
 | v2.4.1 | [画像](v2.4.1/device-printer.png) | [画像](v2.4.1/device-menu.png) | [画像](v2.4.1/device-keyboard.png) | [記録](v2.4.1/device-capture.json) |
 | v2.4.0 | [画像](v2.4.0/device-printer.png) | [画像](v2.4.0/device-menu.png) | [画像](v2.4.0/device-keyboard.png) | [記録](v2.4.0/device-capture.json) |
 | v2.3.2 | [画像](v2.3.2/device-printer.png) | [画像](v2.3.2/device-menu.png) | [画像](v2.3.2/device-keyboard.png) | [記録](v2.3.2/device-capture.json) |
@@ -32,9 +33,10 @@ M5GFXの実際の描画処理と内蔵フォントで320×240の画像を生成�
 | v2.1.0 | [画像](v2.1.0/device-printer.png) | [画像](v2.1.0/device-menu.png) | 未搭載 | [記録](v2.1.0/device-capture.json) |
 | v2.0.0 | [画像](v2.0.0/device-printer.png) | [画像](v2.0.0/device-menu.png) | 未搭載 | [記録](v2.0.0/device-capture.json) |
 
-表示が同じ版もあります。メニューはv2.2.0/v2.3.0、v2.3.1/v2.3.2、v2.4.0/v2.4.1がそれぞれ同一です。
-プリンター詳細はv2.0.0〜v2.3.2、v2.4.0〜v2.4.1の各グループで同一です。
+表示が同じ版もあります。メニューはv2.2.0/v2.3.0、v2.3.1/v2.3.2、v2.4.0/v2.4.1/v2.5.0がそれぞれ同一です。
+プリンター詳細はv2.0.0〜v2.3.2、v2.4.0〜v2.5.0の各グループで同一です。
 音声やサーボの修正など、静止画に現れない変更もあります。
+v2.5.0の撫でる反応も動き・発話が中心で、この3画面には現れません。
 
 ## Web ダッシュボード
 
@@ -47,6 +49,7 @@ Chrome で PC 幅（1040px）とスマートフォン幅（430px）の全ペー�
 
 | リリース | PC | スマートフォン | 撮影元 |
 | --- | --- | --- | --- |
+| [v2.5.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.5.0) | [画像](v2.5.0/web-desktop.png) | [画像](v2.5.0/web-mobile.png) | [記録](v2.5.0/web-capture.json) |
 | [v2.4.1](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.4.1) | [画像](v2.4.1/web-desktop.png) | [画像](v2.4.1/web-mobile.png) | [記録](v2.4.1/web-capture.json) |
 | [v2.4.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.4.0) | [画像](v2.4.0/web-desktop.png) | [画像](v2.4.0/web-mobile.png) | [記録](v2.4.0/web-capture.json) |
 | [v2.3.2](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.3.2) | [画像](v2.3.2/web-desktop.png) | [画像](v2.3.2/web-mobile.png) | [記録](v2.3.2/web-capture.json) |
@@ -66,8 +69,8 @@ Python 3、Node.js 22 以降、Chrome または Chromium が必要です。
 
 ```powershell
 git fetch --tags
-python tools/screenshots/capture_web.py                  # 全8リリース
-python tools/screenshots/capture_web.py --version v2.4.1 # 指定した版だけ
+python tools/screenshots/capture_web.py                  # 全9リリース
+python tools/screenshots/capture_web.py --version v2.5.0 # 指定した版だけ
 ```
 
 ブラウザを検出できない場合は `--browser "ブラウザの実行ファイルのパス"` を追加します。
@@ -91,8 +94,8 @@ Python 3、Pillow、ziglang、PlatformIOが取得したM5GFX依存ライブラ�
 ```powershell
 python -m pip install Pillow ziglang
 git fetch --tags
-python tools/screenshots/capture_device.py                  # 全8リリース
-python tools/screenshots/capture_device.py --version v2.4.1 # 指定した版だけ
+python tools/screenshots/capture_device.py                  # 全9リリース
+python tools/screenshots/capture_device.py --version v2.5.0 # 指定した版だけ
 ```
 
 描画関数・メニュー配置・配色・キーボードのレイアウトはタグから取り出します。
