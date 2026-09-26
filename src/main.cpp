@@ -499,6 +499,14 @@ bool startBodyMotion(bool ignoreAutoStartSkip = false) {
     return false;
   }
 
+  // LOCAL LLM and MQTT share the same controller. A mode change must not
+  // re-enable torque or replace its current trajectory with a UART read.
+  if (bodyMotionState != BodyMotionState::Stopped) {
+    Serial.printf("[motion] retained on mode change: target=(%d,%d)\n",
+                  bodyMotionYawTarget, bodyMotionPitchTarget);
+    return true;
+  }
+
   M5StackChan.setServoPowerEnabled(true);
   delay(80);
   M5StackChan.Motion.setAutoAngleSyncEnabled(true);
@@ -517,6 +525,9 @@ bool startBodyMotion(bool ignoreAutoStartSkip = false) {
 
   M5StackChan.Motion.move(
       bodyMotionYawTarget, bodyMotionPitchTarget, BODY_IDLE_SERVO_SPEED);
+  // Synchronize once on startup; continuous targets keep the spring's current
+  // position/velocity. Resyncing every 80ms amplified transient UART failures.
+  M5StackChan.Motion.setAutoAngleSyncEnabled(false);
   Serial.printf(
       "Body motion idle started current=(%d,%d) home=(%d,%d)\n",
       bodyMotionYawTarget, bodyMotionPitchTarget,

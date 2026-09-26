@@ -257,6 +257,15 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 - 検証: 波形テスト4サンプルレートPASS、読み284文の回帰なし、COM4書込み、MQTT監視中の
   自由文再生を確認。音の聴覚評価とタッチUIの目視確認は未実施。
 
+## Part M: 接続後の首の急動作修正（2026-09-26 / v2.4.1）
+
+- BSPのReadPos失敗(-1)が左端(-1280)へ変換される問題を修正。
+  `tools/patch_stackchan_bsp.py` がビルド時に固定BSPへ自動適用する。
+- LOCAL LLM/MQTT間の切り替えでは動作中の首制御を引き継ぐ。
+  位置の自動同期は動作開始時のみとし、80msごとのUART再同期をやめた。
+- `tools/motion_test/run.py --compare-v240` で旧版を再現し、修正後の回帰テストにPASS。
+  詳細と実機確認は `agent.md` 第10章を参照。
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。

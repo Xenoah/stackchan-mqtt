@@ -4,7 +4,7 @@
 添付された前セッションの会話、現在のコード、今回の実機確認を区別して記録する。
 過去の仕様は `CLAUDE.md`、利用手順は `README.md`、版ごとの差分は `CHANGELOG.md` も参照。
 古い章にある「実機未確認」「3MB app」などは当時の記録であり、現状は下記を優先する。
-**最新の作業は第9章（v2.4.0、UI軽量化・自由文音声の抑揚改善）。**
+**最新の作業は第10章（v2.4.1、プリンター接続後の首の急動作修正）。**
 第1〜8章は主にv2.3.2までの引き継ぎ・診断記録。
 
 ## 1. ユーザーの目的と再開地点
@@ -29,7 +29,7 @@ v2.3.2 修正後の実機監視と、途中で切れた USB/Wi-Fi の原因確�
 - 作業場所: `C:\GitHub\stackchan-mqtt`。
 - origin: `https://github.com/Xenoah/stackchan-mqtt.git`。
 - 再開時 HEAD: `bec9c77`、作業ツリーに既存の未コミット変更なし。
-- ファーム版: `src/Version.h` の v2.4.0（最新の実装・検証は第9章）。
+- ファーム版: `src/Version.h` の v2.4.1（最新の実装・検証は第10章）。
 - `529883e`: v2.1.0 自動 MQTT モード。
 - `2b374cb`: v2.2.0 本体キーボードと接続設定。
 - `6fe6c41`: v2.3.0 日本語・英語の自由文読み上げ。
@@ -381,3 +381,70 @@ python -m esptool --chip esp32s3 --port COM4 --baud 921600 read-flash 0xFF0000 0
   辞書・アクセント解析を調べる。PSOLAだけで固有名詞の読みは直らない。
 - 長時間の顔表示と設定画面の往復は引き続き確認対象。今回の短時間ログだけで
   全条件の安定性を保証しない。
+
+## 10. プリンター接続後に首が左へ急回転する不具合（v2.4.1）
+
+### 症状と原因
+
+- ユーザー報告: 「プリンターつながった後一気に左向く」。追加確認の回答は
+  「左へガッと回ってじわじわ真ん中に戻る」。作業開始HEADは `5d7a6b5`（v2.4.0）。
+- StackChan-BSP 1.1.0の `ScsServo::getCurrentAngle()` は `ReadPos()` の戻り値を
+  そのまま角度へ変換していた。下層の `SCS::readWord()` はUART読取り失敗時に-1を返す。
+  ヨーの既定ゼロ460に対して `(-1 - 460) * 50 / 16` を可動範囲へ丸めると-1280となる。
+- さらに `Servo::update_angle_anim_target()` は自動位置同期がONならこの読取り値へ
+  アニメーションの現在位置をteleportする。通常の首制御が80msごとにこれを呼んでいた。
+  1回の通信失敗で内部の現在位置が左端へ飛び、後続の正常な目標へゆっくり戻る経路を確認。
+  発生時のUARTログは旧版では記録していないため、ユーザーの実際の発生時刻との照合はできない。
+- `activateMode()` はLOCAL LLM→MQTTの自動移行時にも `startBodyMotion()` を呼び、
+  既に動いているサーボのトルク有効化・位置読取り・動作開始時刻のリセットを繰り返していた。
+
+### 修正
+
+- `tools/patch_stackchan_bsp.py` を `platformio.ini` のPOSTスクリプトへ追加。
+  依存取得後・コンパイル前に、固定版BSPの読取り処理へ修正を適用。
+  元ソースの該当断片が一致しなければビルドを失敗させ、適用済みなら再変更しない。
+  `.pio/libdeps` の手編集だけに依存しない。BSPを更新するときはこのスクリプトも見直す。
+- 生の位置が有効範囲0〜1000から外れたら、角度へ変換せず基底 `Servo::getCurrentAngle()`
+  の現在のアニメーション推定位置を返す。実測の正常な左端・右端はそのまま利用可能。
+  `invalid position ... retaining motion estimate` を初回と最大5秒に1回記録する。
+- `startBodyMotion()` は既にIdle/Joyなら何も再初期化せずreturn。
+  `[motion] retained on mode change: target=(...)` でモード間の引継ぎを記録する。
+- 停止状態からの開始時だけ実測位置へ同期し、その後はAutoAngleSyncをOFFにする。
+  連続する目標変更では内部位置・速度を保ち、不要なUART読取りと速度のリセットを減らす。
+- パーティション、Wi-Fi/MQTT、音声パック、NVSのゼロ位置・校正値は変更しない。
+  この修正のために再キャリブレーションする必要はない。
+
+### 回帰テスト
+
+- `python tools/motion_test/run.py --compare-v240`。Pythonのziglangを使用。
+- BSPの実際の読取り関数とmain.cppの実際の開始関数を抽出してC++で実行し、
+  UARTとサーボ出力だけをモック化。接続した実機は動かさない。
+- v2.4.0では `timeout became a full-left angle` を期待どおり再現。
+  修正版は初回-1、途中-1、範囲外65535、正常な両端、警告間隔、初回姿勢保持、
+  Idle/Joy中のMQTT移行、校正なし・自動開始抑止の各ケースにPASS。
+- パッチの再適用が無変更であることと、未知の依存ソースを拒否することも確認。
+
+### 実機・公開用成果物
+
+- ビルドSUCCESS。BSPの `M5StackChan.cpp.o` が修正後ソースから再コンパイルされることを確認。
+  RAM66,048B、Flash5,203,705B（v2.4.0から176B増）。`.pio/motion-test/build.log`。
+- 12:00頃COM4へ通常の `upload` 成功、書込みハッシュ照合成功。
+  書込み直後に `tools/monitor_serial.py` を起動して起動・再接続を記録した。
+- 12:00:52の初期位置は(-3,181)。12:00:54に
+  `[motion] retained on mode change: target=(-18,193)` → `Mode changed: MQTT` →
+  `[mode] print started: LOCAL LLM -> MQTT` を確認。初期化は1回だけで、接続時は引継ぎ。
+- `/status` でv2.4.1、APIでMQTT / online / synced / RUNNINGを確認。
+  `.pio/motion-test/status.json`。プリンターのジョブ操作は行っていない。
+- 12:02:30にUSB切断、12:02:32に `POWERON` 起動を1回記録。PANICや例外ログはない。
+  初期位置(-15,181)、再接続時の引継ぎ目標(-8,194)でMQTTへ自動移行。
+  起動を記録する試験なので「再起動0」「USB切断0」とは記録しない。
+- 監視は12:00:38〜12:03:38の180秒で正常終了。`boot.log` / `boot.summary.json`。
+  起動行2（書込み後＋POWERON）、USB切断1、異常候補0。監視プロセスは終了済み。
+- 更新後の動きをユーザーに確認し、「今回は急に回らなかった」との回答を得た。
+  通信失敗を実機に注入する操作は行わず、エラー値の回帰はホストテストで検証した。
+- 再起動後の実況も完了（`ok=1 max_mora_us=8843`）。その後free_heap=161,380B、
+  PSRAM=8,196,235B、stack残量face=6,428B / loop=4,988B / mqtt=9,176B。
+- 成果物 `.release/v2.4.1/`: 分割バイナリ、全体イメージ、対応ELFのZIP、SHA256SUMS。
+  firmware.binのSHA256は `e6361cd8de1b067457399b5e582e2ee80038f91bb47df10664bf393c89567612`。
+  通常更新ではfirmware.binのみを0x10000へ書く。NVS・LittleFSの変更は不要。
+  公開先: `https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.4.1`。
