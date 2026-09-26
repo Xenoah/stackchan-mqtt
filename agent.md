@@ -520,3 +520,14 @@ python -m esptool --chip esp32s3 --port COM4 --baud 921600 read-flash 0xFF0000 0
 - READMEでは本体3画面を先に載せ、Web画面を折りたたみに変更。
   `docs/screenshots/README.md` へメニュー変遷の比較、全版の本体画像、生成手順を追加。
   元のUIにある文字の切れも再現画像ではそのまま保持し、この文書作業でファームは変更しない。
+- 公開コミット `9120aef` をmainへpush済み。全8リリースの画像ブロックを更新し、
+  本体画面を先に、Web画面は同一になる理由を添えて折りたたみ内に表示。
+  画像は `9120aef94dbab4d4087514b949465a1ed711a3c6` の固定URLを参照する。
+- 22枚のPNG読取り・寸法・非単色、全ソース/画像ハッシュ、README画像パス、Python構文、
+  `git diff --check` を確認。内容の異なる全9種類（メニュー5、詳細2、キーボード2）を目視確認。
+  全8タグでホスト生成が正常終了した。ファームの変更・再ビルド・実機書込みは行っていない。
+- 公開された計38画像（本体22＋Web16）のHTTP取得とSHA256照合に成功。
+  READMEとv2.4.1リリースの描画済みHTMLに本体3枚とWeb2枚が含まれることを確認。
+  全8リリースの元本文・50アセットも保持。記録は `.pio/screenshots/device-published-check.json`、
+  `device-release-notes/*.before.json` / `*.after.json`。
+  Windowsで改行を二重変換しないよう、リリース本文はLFへ正規化し `newline='\n'` でファイル出力する。
