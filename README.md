@@ -13,6 +13,23 @@ M5Stack StackChan（K151 / CoreS3）が **Bambu Lab P1S の印刷をリアルタ
 v2.4.1では、プリンター接続後に首が急に左へ回る不具合を修正しました。
 通常のファーム更新で適用でき、音声パックの書込みや再キャリブレーションは不要です。
 
+## スクリーンショット
+
+v2.4.1 の Web ダッシュボード。印刷の進捗、温度、AMS、実況ログを確認できます。
+各タグの画面をサンプルデータで表示して撮影しています。画像をクリックすると原寸で開きます。
+
+<table>
+<tr><th>PC</th><th>スマートフォン</th></tr>
+<tr>
+<td valign="top"><a href="docs/screenshots/v2.4.1/web-desktop.png"><img src="docs/screenshots/v2.4.1/web-desktop.png" width="520" alt="v2.4.1 PC版Webダッシュボード：印刷62%、温度、AMS、実況ログ"></a></td>
+<td valign="top"><a href="docs/screenshots/v2.4.1/web-mobile.png"><img src="docs/screenshots/v2.4.1/web-mobile.png" width="230" alt="v2.4.1 スマートフォン版Webダッシュボード：進捗リングと縦並びのカード"></a></td>
+</tr>
+</table>
+
+[過去のリリースのスクリーンショット・撮影方法](docs/screenshots/README.md)
+
+## 構成
+
 ```mermaid
 flowchart LR
     P[Bambu Lab P1S] -->|MQTT over TLS :8883<br>push_status| S[StackChan CoreS3]
