@@ -650,3 +650,8 @@ python -m esptool --chip esp32s3 --port COM4 --baud 921600 read-flash 0xFF0000 0
 - v2.5.1タグの対象は `f5f1b3f`。タグから字幕付きの顔2枚、本体UI3枚、Web2枚を生成した。
   `docs/screenshots/v2.5.1/` の7PNGを読み取り、全ソース/画像SHA256とタグの一致を確認。
   字幕の顔2枚をREADME冒頭とリリース説明の先頭画像に追加する。
+- push・プレリリース公開完了: `https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.5.1`。
+  画像は `96331c0` の固定URL。公開7画像をHTTP取得してSHA256照合し、
+  GitHubの7アセットのサイズ・SHA256、説明文、プレリリース区分も一致を確認した。
+  `.pio/caption-test/published-release.json` / `published-check.json` に記録。
+  実LCDでの字幕の見え方はユーザー回答待ち。作業終了時に継続中のシリアル監視はない。
