@@ -66,6 +66,15 @@ void FaceHud::clearCaption() {
   portEXIT_CRITICAL(&mux_);
 }
 
+bool FaceHud::hasCaption() {
+  const uint32_t now = millis();
+  portENTER_CRITICAL(&mux_);
+  const bool live = caption_[0] != '\0' &&
+      (captionUntil_ == 0 || static_cast<int32_t>(now - captionUntil_) < 0);
+  portEXIT_CRITICAL(&mux_);
+  return live;
+}
+
 void FaceHud::setToast(const char* text, uint32_t durationMs) {
   const uint32_t now = millis();
   portENTER_CRITICAL(&mux_);
@@ -105,11 +114,11 @@ void FaceHud::draw(M5Canvas* canvas, int colorDepth, uint16_t fg,
   }
   portEXIT_CRITICAL(&mux_);
 
-  if (!d.visible) return;
+  if (!d.visible && caption[0] == '\0') return;
 
   canvas->setTextSize(1);
   canvas->setTextWrap(false);
-  drawTopBar(canvas, d, fg, bg, now);
+  if (d.visible) drawTopBar(canvas, d, fg, bg, now);
   drawBottom(canvas, d, caption, since, toast, fg, bg, now);
 }
 
@@ -316,7 +325,6 @@ int FaceHud::drawWrapped(M5Canvas* c, const char* text, int x, int y,
 void HudMouth::draw(M5Canvas* spi, m5avatar::BoundingRect rect,
                     m5avatar::DrawContext* ctx) {
   inner_->draw(spi, rect, ctx);
-  if (!hud_->isVisible()) return;
   const int depth = ctx->getColorDepth();
   const uint16_t fg =
       depth == 1 ? 1 : ctx->getColorPalette()->get(COLOR_PRIMARY);

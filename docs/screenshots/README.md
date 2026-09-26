@@ -7,6 +7,18 @@ M5GFXの実際の描画処理と内蔵フォントで320×240の画像を生成�
 **実機から取得したスクリーンショットや写真ではなく、描画コードによる再現イメージです。**
 印刷状況・ネットワーク名・入力値はサンプルです。古いファームを実機へ書き込む操作は行っていません。
 
+### 日本語字幕（v2.5.1）
+
+| 通常の顔画面 | MQTTの顔画面 |
+| --- | --- |
+| ![通常モードの日本語字幕](v2.5.1/device-pet-local.png) | ![MQTTモードの日本語字幕](v2.5.1/device-pet-mqtt.png) |
+
+タグのFaceHudとm5stack-avatar 0.10.0の顔パーツを実行した画面再現イメージです。
+日本語フォントはlgfxJapanGothicP_16、顔スプライトは実機と同じ1bitです。
+固定サンプルは笑顔・口開度0.35・呼吸位相0、MQTT側は進捗62%・残り42分。
+[生成記録](v2.5.1/caption-capture.json)にソースと画像のハッシュを記録しています。
+実機から取得した写真ではありません。
+
 ### メニューの変化
 
 | v2.0.0：2列のメニュー | v2.1.0：MQTTモード追加 |
@@ -23,6 +35,7 @@ M5GFXの実際の描画処理と内蔵フォントで320×240の画像を生成�
 
 | リリース | プリンター詳細 | メニュー | キーボード | 生成記録 |
 | --- | --- | --- | --- | --- |
+| v2.5.1 | [画像](v2.5.1/device-printer.png) | [画像](v2.5.1/device-menu.png) | [画像](v2.5.1/device-keyboard.png) | [記録](v2.5.1/device-capture.json) |
 | v2.5.0 | [画像](v2.5.0/device-printer.png) | [画像](v2.5.0/device-menu.png) | [画像](v2.5.0/device-keyboard.png) | [記録](v2.5.0/device-capture.json) |
 | v2.4.1 | [画像](v2.4.1/device-printer.png) | [画像](v2.4.1/device-menu.png) | [画像](v2.4.1/device-keyboard.png) | [記録](v2.4.1/device-capture.json) |
 | v2.4.0 | [画像](v2.4.0/device-printer.png) | [画像](v2.4.0/device-menu.png) | [画像](v2.4.0/device-keyboard.png) | [記録](v2.4.0/device-capture.json) |
@@ -33,8 +46,8 @@ M5GFXの実際の描画処理と内蔵フォントで320×240の画像を生成�
 | v2.1.0 | [画像](v2.1.0/device-printer.png) | [画像](v2.1.0/device-menu.png) | 未搭載 | [記録](v2.1.0/device-capture.json) |
 | v2.0.0 | [画像](v2.0.0/device-printer.png) | [画像](v2.0.0/device-menu.png) | 未搭載 | [記録](v2.0.0/device-capture.json) |
 
-表示が同じ版もあります。メニューはv2.2.0/v2.3.0、v2.3.1/v2.3.2、v2.4.0/v2.4.1/v2.5.0がそれぞれ同一です。
-プリンター詳細はv2.0.0〜v2.3.2、v2.4.0〜v2.5.0の各グループで同一です。
+表示が同じ版もあります。メニューはv2.2.0/v2.3.0、v2.3.1/v2.3.2、v2.4.0/v2.4.1/v2.5.0/v2.5.1がそれぞれ同一です。
+プリンター詳細はv2.0.0〜v2.3.2、v2.4.0〜v2.5.1の各グループで同一です。
 音声やサーボの修正など、静止画に現れない変更もあります。
 v2.5.0の撫でる反応も動き・発話が中心で、この3画面には現れません。
 
@@ -49,6 +62,7 @@ Chrome で PC 幅（1040px）とスマートフォン幅（430px）の全ペー�
 
 | リリース | PC | スマートフォン | 撮影元 |
 | --- | --- | --- | --- |
+| [v2.5.1](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.5.1) | [画像](v2.5.1/web-desktop.png) | [画像](v2.5.1/web-mobile.png) | [記録](v2.5.1/web-capture.json) |
 | [v2.5.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.5.0) | [画像](v2.5.0/web-desktop.png) | [画像](v2.5.0/web-mobile.png) | [記録](v2.5.0/web-capture.json) |
 | [v2.4.1](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.4.1) | [画像](v2.4.1/web-desktop.png) | [画像](v2.4.1/web-mobile.png) | [記録](v2.4.1/web-capture.json) |
 | [v2.4.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.4.0) | [画像](v2.4.0/web-desktop.png) | [画像](v2.4.0/web-mobile.png) | [記録](v2.4.0/web-capture.json) |
@@ -69,8 +83,8 @@ Python 3、Node.js 22 以降、Chrome または Chromium が必要です。
 
 ```powershell
 git fetch --tags
-python tools/screenshots/capture_web.py                  # 全9リリース
-python tools/screenshots/capture_web.py --version v2.5.0 # 指定した版だけ
+python tools/screenshots/capture_web.py                  # 全10リリース
+python tools/screenshots/capture_web.py --version v2.5.1 # 指定した版だけ
 ```
 
 ブラウザを検出できない場合は `--browser "ブラウザの実行ファイルのパス"` を追加します。
@@ -94,8 +108,8 @@ Python 3、Pillow、ziglang、PlatformIOが取得したM5GFX依存ライブラ�
 ```powershell
 python -m pip install Pillow ziglang
 git fetch --tags
-python tools/screenshots/capture_device.py                  # 全9リリース
-python tools/screenshots/capture_device.py --version v2.5.0 # 指定した版だけ
+python tools/screenshots/capture_device.py                  # 全10リリース
+python tools/screenshots/capture_device.py --version v2.5.1 # 指定した版だけ
 ```
 
 描画関数・メニュー配置・配色・キーボードのレイアウトはタグから取り出します。
@@ -105,3 +119,14 @@ python tools/screenshots/capture_device.py --version v2.5.0 # 指定した版だ
 
 各 `device-capture.json` にタグのコミット、入力ソースのSHA256、描画ライブラリ、色深度、
 画像の寸法とSHA256を記録しています。コンパイル中間ファイルは `.pio/screenshots/native` に保存します。
+
+
+日本語字幕と顔の再現・表示期限の確認は、同じ環境で次を実行します。
+
+```powershell
+python tools/screenshots/capture_captions.py                  # 作業ツリーの検証とプレビュー
+python tools/screenshots/capture_captions.py --version v2.5.1 # タグから再生成
+```
+
+顔のパーツ描画・配置・字幕処理は実際のコードを使い、時刻と入出力をホスト用に置き換えます。
+字幕だけの表示、発話中の保持、終了後の消去、MQTT情報との同時表示も確認します。

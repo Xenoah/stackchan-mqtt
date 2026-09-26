@@ -39,8 +39,8 @@ def function(source, signature):
 
 def compile_one(source, destination, cpp, extra=()):
     command = [sys.executable, '-m', 'ziglang', 'c++' if cpp else 'cc', '-O1',
-               '-DLGFX_SDL', '-I' + str(GFX / 'src'), '-I' + str(SDL / 'include'),
-               *extra, '-c', str(source), '-o', str(destination)]
+               '-DLGFX_SDL', *extra, '-I' + str(GFX / 'src'), '-I' + str(SDL / 'include'),
+               '-c', str(source), '-o', str(destination)]
     if cpp:
         command[5:5] = ['-std=c++17', '-Wno-vla-cxx-extension']
     subprocess.run(command, cwd=ROOT, check=True)

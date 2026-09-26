@@ -48,6 +48,7 @@ struct {
   void toggleShowcase() { showcase = !showcase; }
   void setExpression(m5avatar::Expression) {}
   void showStatus(const char*,uint32_t) {}
+  void showCaption(const char*,uint32_t) {}
   void returnToDefaultAfter(uint32_t) {}
 } avatarFace;
 struct { template<typename... T> void printf(const char*, T...) {} } Serial;

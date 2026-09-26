@@ -629,7 +629,9 @@ void triggerPetHappyMotion() {
     closePrinterScreen();
   }
   avatarFace.setExpression(m5avatar::Expression::Happy);
-  avatarFace.showStatus(petReaction.level() >= 3 ? "LOVE!" : "HAPPY!", 2200);
+  if (!petSpeaking) {
+    avatarFace.showCaption(petReaction.level() >= 3 ? "だいすき！" : "なでなで、うれしい！", 2200);
+  }
   avatarFace.returnToDefaultAfter(petReaction.remaining(millis()) + 800);
   showStatusLed(96, 24, 72, petReaction.remaining(millis()));
   if (calibrationController.data().servoValid && modeUsesBodyMotion() &&
@@ -1092,7 +1094,10 @@ void speakText(const String& text) {
 
   speaking = true;
   avatarFace.setExpression(m5avatar::Expression::Happy);
-  avatarFace.showStatus("TTS", 900);
+  String caption = text;
+  if (caption.startsWith("__SAY__")) caption = caption.substring(7);
+  else if (caption.startsWith("__")) caption = "";  // Gatewayの音声だけでは本文が不明
+  avatarFace.showCaption(caption, 0);
   showStatusLed(0, 0, 96); // 青色LED: TTS通信中
 
   bool success = useServer && playTts(text);
@@ -1105,7 +1110,14 @@ void speakText(const String& text) {
     } else if (spoken.startsWith("__")) {
       spoken = kBuiltinGreeting;
     }
-    success = builtinVoice.speak(spoken) || builtinVoice.speak(kBuiltinGreeting);
+    caption = spoken;
+    avatarFace.showCaption(caption, 0);
+    success = builtinVoice.speak(spoken);
+    if (!success) {
+      caption = kBuiltinGreeting;
+      avatarFace.showCaption(caption, 0);
+      success = builtinVoice.speak(caption);
+    }
   }
 
   if (success) {
@@ -1120,6 +1132,8 @@ void speakText(const String& text) {
   }
 
   speaking = false;
+  if (success) avatarFace.showCaption(caption, 2500);
+  else avatarFace.hud().clearCaption();
 }
 
 // 起動時のあいさつ（内蔵ボイスがあるときだけ。スピーカーの動作確認も兼ねる）
@@ -1129,8 +1143,10 @@ void greetOnBoot() {
   }
   speaking = true;
   avatarFace.setExpression(m5avatar::Expression::Happy);
+  avatarFace.showCaption(kBuiltinGreeting, 0);
   builtinVoice.speak(kBuiltinGreeting);
   speaking = false;
+  avatarFace.showCaption(kBuiltinGreeting, 2500);
   avatarFace.returnToDefaultAfter(1500);
 }
 
@@ -1252,7 +1268,6 @@ void performComment(Comment comment) {
     drawPrinterScreenNow();
   }
 
-  FaceHud& hud = avatarFace.hud();
   // 夜間は High（完了・失敗・エラー・手動の依頼）だけ声に出し、ほかは字幕のみ。
   // 内蔵ボイスがあれば Wi-Fi やサーバーが無くても喋れる。
   const bool canSpeak = builtinVoice.isReady() || configPortal.isConnected();
@@ -1261,12 +1276,12 @@ void performComment(Comment comment) {
       !(inQuietHours() && comment.priority != CommentPriority::High);
   uint32_t holdMs = captionDurationMs(comment.text);
   if (voice) {
-    hud.setCaption(comment.text, 0);  // 喋り終わるまで出し続ける
+    avatarFace.showCaption(comment.text, 0);  // 喋り終わるまで出し続ける
     speaking = true;
     const bool ok = speakSentence(comment.spoken());
     speaking = false;
     holdMs = 2500;
-    hud.setCaption(comment.text, holdMs);
+    avatarFace.showCaption(comment.text, holdMs);
     if (!ok) {
       avatarFace.showStatus("TTS ERROR", 2500);
       showStatusLed(96, 0, 0, 3000);
@@ -1275,7 +1290,7 @@ void performComment(Comment comment) {
                     builtinVoice.lastError().c_str());
     }
   } else {
-    hud.setCaption(comment.text, holdMs);
+    avatarFace.showCaption(comment.text, holdMs);
   }
 
   if (comment.celebrate) {
@@ -1306,17 +1321,16 @@ bool performPetResponse() {
   commentator.remember(comment);
   lastCommentText = text;
   avatarFace.setExpression(m5avatar::Expression::Happy);
-  avatarFace.showStatus(level >= 3 ? "LOVE!" : "HAPPY!", 6000);
-  avatarFace.hud().setCaption(text, 6000);
   const bool voice = configPortal.config().commentaryVoice &&
                      (builtinVoice.isReady() || configPortal.isConnected());
+  avatarFace.showCaption(text, voice ? 0 : 6000);
   bool ok = true;
   if (voice) {
     petSpeaking = speaking = true;
     ok = builtinVoice.isReady() ? builtinVoice.speak(text) : speakSentence(text);
     stopLipSync();
     speaking = petSpeaking = false;
-    avatarFace.hud().setCaption(text, 2500);
+    avatarFace.showCaption(text, 2500);
   }
   avatarFace.returnToDefaultAfter(petReaction.remaining(millis()) + 800);
   commentBusyUntil = millis() + kCommentGapMs;

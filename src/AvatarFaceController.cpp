@@ -186,10 +186,16 @@ void AvatarFaceController::update() {
     resetToDefault();
   }
 
+  const bool captionVisible = hud_.hasCaption();
+  if (captionVisible != captionVisible_) {
+    captionVisible_ = captionVisible;
+    applyTransform();  // 表示開始時は等倍、終了時は選択した変形に戻す
+  }
+
   // 呼吸に合わせた軽いズーム（Normal変形時のみ）。
   // 顔全体がゆっくり拡大縮小して、より生き生きと大げさに見せる。
   // HUD 表示中は HUD ごと拡大縮小されて読みにくくなるため止める。
-  if (!showcaseEnabled_ && !hud_.isVisible() &&
+  if (!showcaseEnabled_ && !hud_.isVisible() && !captionVisible_ &&
       transformPatternIndex_ ==
           static_cast<size_t>(TransformPattern::Normal)) {
     const float pulse = 1.0f + 0.06f * sinf(now * 0.0026f); // ~2.4秒周期で±6%
@@ -328,6 +334,15 @@ void AvatarFaceController::showStatus(const char* text,
   }
   applySpeechText(text);
   statusClearAt_ = durationMs == 0 ? 0 : millis() + durationMs;
+}
+
+void AvatarFaceController::showCaption(const String& text, uint32_t durationMs) {
+  applySpeechText("");  // 標準吹き出しと字幕を重ねない
+  statusClearAt_ = 0;
+  hud_.setToast("", 0);
+  hud_.setCaption(text, durationMs);
+  captionVisible_ = hud_.hasCaption();
+  applyTransform();
 }
 
 FaceHud& AvatarFaceController::hud() {
@@ -593,6 +608,8 @@ void AvatarFaceController::applyTransform() {
   // まずデフォルト値にリセット
   avatar_.setScale(1.0f);
   avatar_.setRotation(0.0f);
+
+  if (hud_.hasCaption()) return;  // 画面下の日本語が拡大・回転で切れないようにする
 
   switch (pattern) {
     case TransformPattern::Normal:

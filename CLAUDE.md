@@ -279,6 +279,17 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 - `python tools/pet_test/run.py` で実際の状態機械とmainの動作関数をホスト検証。
   詳しい実装・検証と実機確認の範囲は `agent.md` 第13章を参照。
 
+## Part O: 日本語字幕（2026-09-26 / v2.5.1）
+
+- `FaceHud` の字幕表示をプリンターHUDのvisibleから独立させ、全モードの顔画面で描画する。
+  `HudMouth` の早期returnも取り除く。既存の日本語16pxフォント・UTF-8折返し・バッファを再利用。
+- `AvatarFaceController::showCaption` は標準吹き出しを消し、字幕中は拡大・回転を止める。
+  表示終了後に元の変形・通常の呼吸ズームへ戻す。
+- 撫でる返事は発話中ずっと保持し、終了後2.5秒表示。発話中の追加の撫で動作で上書きしない。
+  起動あいさつ・通常読み上げ・実況も同じ字幕を使用。本文不明のGateway命令は字幕に出さない。
+- `tools/screenshots/capture_captions.py` で実際の描画コード・顔パーツ・フォントを使って検証/撮影。
+  実機の確認範囲とリリース記録は `agent.md` 第14章を参照。
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。

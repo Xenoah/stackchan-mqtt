@@ -8,40 +8,50 @@ M5Stack StackChan（K151 / CoreS3）が **Bambu Lab P1S の印刷をリアルタ
 - プリンタ通信: [Xenoah/ESP32-bambu-MQTT](https://github.com/Xenoah/ESP32-bambu-MQTT)
   の Bambu Lab LAN MQTT 実装を StackChan 向けに再構成
 
-**現在のリリース: [v2.5.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.5.0)（プレリリース）**
+**現在のリリース: [v2.5.1](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.5.1)（プレリリース）**
 
-v2.5.0では、頭を撫でると笑顔で首を振り、うなずきながら嬉しそうに話すようになりました。
+v2.5.1では、撫でたときの返事が通常の顔画面でも**日本語字幕**で表示されます。
 続けて撫でるほど反応が大きくなります。音声パックの書込みや再キャリブレーションは不要です。
 
 ## スクリーンショット
 
-### スタックチャン本体（v2.5.0）
+### スタックチャン本体（v2.5.1）
+
+**なでなでの返事と日本語字幕**（描画コードによる画面再現イメージ）
+
+| 通常の顔画面 | MQTTの顔画面 |
+| --- | --- |
+| ![日本語字幕でなでなでに返事する顔](docs/screenshots/v2.5.1/device-pet-local.png) | ![MQTTの情報と日本語字幕を表示する顔](docs/screenshots/v2.5.1/device-pet-mqtt.png) |
+
+実際の顔パーツと日本語フォントで再現しています。動きの途中の表情・印刷状況はサンプルです。
+
+**プリンター詳細・メニュー・キーボード**
 
 各タグの本体描画コードとフォントを使って、PC上で生成した**画面再現イメージ**です。
-320×240ピクセル、v2.5.0の8bit配色を反映しています。印刷状況と入力値はサンプルです。
+320×240ピクセル、v2.5.1の8bit配色を反映しています。印刷状況と入力値はサンプルです。
 この3画面の見た目はv2.4.1と共通です。撫でたときの動き・発話は静止画には含まれません。
 
 | プリンター詳細 | メニュー |
 | --- | --- |
-| ![v2.5.0 本体のプリンター詳細画面の再現イメージ](docs/screenshots/v2.5.0/device-printer.png) | ![v2.5.0 本体メニューの再現イメージ](docs/screenshots/v2.5.0/device-menu.png) |
+| ![v2.5.1 本体のプリンター詳細画面の再現イメージ](docs/screenshots/v2.5.1/device-printer.png) | ![v2.5.1 本体メニューの再現イメージ](docs/screenshots/v2.5.1/device-menu.png) |
 
 **本体のタッチキーボード（Wi-Fi設定）**
 
-![v2.5.0 本体のWi-Fiパスワード入力画面の再現イメージ](docs/screenshots/v2.5.0/device-keyboard.png)
+![v2.5.1 本体のWi-Fiパスワード入力画面の再現イメージ](docs/screenshots/v2.5.1/device-keyboard.png)
 
 [各版の本体画面と変化・生成方法](docs/screenshots/README.md)
 
 <details>
 <summary>Web ダッシュボード（PC・スマートフォン）</summary>
 
-v2.5.0のWeb画面をサンプルデータで表示して撮影しています。画像をクリックすると原寸で開きます。
-**v2.1.0〜v2.5.0はWeb画面のソースが同じため、同じデータでは画像も同一です。**
+v2.5.1のWeb画面をサンプルデータで表示して撮影しています。画像をクリックすると原寸で開きます。
+**v2.1.0〜v2.5.1はWeb画面のソースが同じため、同じデータでは画像も同一です。**
 
 <table>
 <tr><th>PC</th><th>スマートフォン</th></tr>
 <tr>
-<td valign="top"><a href="docs/screenshots/v2.5.0/web-desktop.png"><img src="docs/screenshots/v2.5.0/web-desktop.png" width="520" alt="v2.5.0 PC版Webダッシュボード：印刷62%、温度、AMS、実況ログ"></a></td>
-<td valign="top"><a href="docs/screenshots/v2.5.0/web-mobile.png"><img src="docs/screenshots/v2.5.0/web-mobile.png" width="230" alt="v2.5.0 スマートフォン版Webダッシュボード：進捗リングと縦並びのカード"></a></td>
+<td valign="top"><a href="docs/screenshots/v2.5.1/web-desktop.png"><img src="docs/screenshots/v2.5.1/web-desktop.png" width="520" alt="v2.5.1 PC版Webダッシュボード：印刷62%、温度、AMS、実況ログ"></a></td>
+<td valign="top"><a href="docs/screenshots/v2.5.1/web-mobile.png"><img src="docs/screenshots/v2.5.1/web-mobile.png" width="230" alt="v2.5.1 スマートフォン版Webダッシュボード：進捗リングと縦並びのカード"></a></td>
 </tr>
 </table>
 
@@ -75,6 +85,7 @@ flowchart LR
 「えへへ、なでなでうれしい！」などの短いセリフを話します。
 
 - 続けて撫でると喜びが3段階で強くなり、話している最中の撫で方にも反応します。
+- 返事は画面下に日本語字幕で表示します。発話中は消えず、話し終わってからも2.5秒残ります。通常モード・MQTTのHUD OFFでも表示されます。
 - 最後に撫でてから約6秒で落ち着きます。プリンター詳細画面を開いていた場合は、一時的に顔を見せてから元に戻ります。
 - 内蔵ボイスを優先するため、TTSサーバーなしでも動きます。実況OFFでは表情・動きで反応します。
 - 設定操作を優先し、LEVEL HOLD中は水平維持を続けます。完了・エラー等の大事な通知も優先します。
@@ -182,7 +193,7 @@ microSD スロット付近の RST ボタンを約3秒長押ししてダウンロ
 Wi-Fi 設定・キャリブレーションを保存している NVS も消えるので、初回セットアップからになります。
 
 ```powershell
-python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.5.0-full.bin
+python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.5.1-full.bin
 ```
 
 **アップデート（設定を残す）**: 4つのファイルをそれぞれのアドレスに書き込みます。NVS（0x9000〜）には触れません。

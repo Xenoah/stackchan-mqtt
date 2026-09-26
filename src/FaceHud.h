@@ -6,7 +6,7 @@
 // 顔の上に重ねるプリンタ HUD（ヘッドアップ表示）の表示内容。
 // メインループが set() で書き込み、アバター描画タスクが draw() で読む。
 struct HudData {
-  bool visible = false;      // HUD 全体の表示
+  bool visible = false;      // プリンター情報の表示（字幕は独立）
   bool active = false;       // 印刷ジョブ進行中（進捗バー・残り時間を出す）
   bool alert = false;        // エラー/お知らせあり（状態チップを点滅）
   char phase[28] = "";       // 状態チップの文字（例: "印刷中"）
@@ -33,6 +33,7 @@ class FaceHud {
   // 字幕（実況テキスト）を表示する。durationMs=0 で clearCaption() まで表示
   void setCaption(const String& text, uint32_t durationMs);
   void clearCaption();
+  bool hasCaption();  // 有効期限内の字幕があるか（プリンター情報のON/OFFとは独立）
 
   // 短いステータス表示（"TTS" など）。字幕が無いときだけ下部に出す
   void setToast(const char* text, uint32_t durationMs);

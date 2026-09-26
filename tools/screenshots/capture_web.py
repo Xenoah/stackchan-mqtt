@@ -17,7 +17,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-VERSIONS = ["v2.0.0", "v2.1.0", "v2.2.0", "v2.3.0", "v2.3.1", "v2.3.2", "v2.4.0", "v2.4.1", "v2.5.0"]
+VERSIONS = ["v2.0.0", "v2.1.0", "v2.2.0", "v2.3.0", "v2.3.1", "v2.3.2", "v2.4.0", "v2.4.1", "v2.5.0", "v2.5.1"]
 SAMPLE = {
     "enabled": True, "voice": True, "mode": "mqtt", "auto_mode": True,
     "link": "online", "synced": True, "age": 1,

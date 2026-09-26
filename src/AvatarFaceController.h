@@ -74,6 +74,9 @@ class AvatarFaceController {
   // HUD 表示中は吹き出しの代わりに HUD 下段へ短く表示する。
   void showStatus(const char* text, uint32_t durationMs = 1400);
 
+  // 日本語字幕。全モードで表示し、durationMs=0なら発話終了まで保持できる。
+  void showCaption(const String& text, uint32_t durationMs);
+
   // 顔に重ねるプリンタ HUD（全顔テンプレートの口パーツに差し込み済み）
   FaceHud& hud();
 
@@ -143,6 +146,7 @@ class AvatarFaceController {
   bool started_ = false;          // begin()が呼ばれたかどうか
   bool drawingPaused_ = false;    // 描画タスクが一時停止中かどうか
   bool expressionPending_ = false; // 一時停止中に変えた表情（再開時に反映する）
+  bool captionVisible_ = false;   // 字幕表示中はズーム・回転を止める
   bool showcaseEnabled_ = false;  // ショーケースモードが有効かどうか
   bool blinkClosed_ = false;      // まばたき中（目を閉じている）かどうか
   bool gamingRgb_ = false;        // ゲーミングRGB（虹色循環）が有効かどうか
