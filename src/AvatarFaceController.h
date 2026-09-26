@@ -166,6 +166,9 @@ class AvatarFaceController {
   // expressionIndex_に対応する表情をアバターに適用する
   void applyExpression();
 
+  // 吹き出しの String を描画中に書き換えない。
+  void applySpeechText(const char* text);
+
   // faceIndex_に対応する顔型をアバターに適用する
   void applyFace();
 

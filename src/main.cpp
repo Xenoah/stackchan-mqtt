@@ -24,6 +24,7 @@
 #include "BuiltinVoice.h"
 #include "CalibrationController.h"
 #include "ConfigPortal.h"
+#include "PetReaction.h"
 #include "PrintCommentator.h"
 #include "PrinterJson.h"
 #include "PrinterScreen.h"
@@ -73,6 +74,8 @@ void updatePrinterMonitor(uint32_t now);
 void updatePrinterHud(const PrinterState& s);
 void closePrinterScreen();
 void showPrinterScreenIfFree();
+void openPrinterScreen();
+void updatePetInteraction();
 bool updatePrinterLed(uint32_t now);
 String ttsTextFor(const String& text);
 
@@ -85,7 +88,11 @@ int currentMouthOpen = 0;         // 現在の口の開き度合い（0〜100）
 int targetMouthOpen = 0;          // 目標の口の開き度合い（TTSから設定）
 bool lipSyncActive = false;       // 口パク同期が動作中かどうか
 bool speaking = false;            // TTSが話し中かどうか
-bool ignoreNextTopClick = false;  // スワイプ後の誤クリック防止フラグ
+PetReaction petReaction;
+bool petInteractionReady = false;  // 起動・校正中は頭を撫でても操作しない
+bool petFeedbackPending = false;
+bool petSpeaking = false;
+bool petRestorePrinterScreen = false;
 
 // Gateway からの POST /api/speak 受付用。
 // WebServer ハンドラ内では再生せず（ブロッキングのため）、フラグを立てて
@@ -371,6 +378,7 @@ enum class BodyMotionState {
   Stopped,
   Idle,
   Joy,
+  Pet,
 };
 
 constexpr uint32_t BODY_MOTION_UPDATE_INTERVAL_MS = 80;
@@ -471,7 +479,7 @@ bool bodyMotionCanUseServo() {
          !modeMenuOpen &&
          !settingsInfoOpen &&
          !deviceSetupOpen &&
-         !speaking;
+         (!speaking || (petSpeaking && bodyMotionState == BodyMotionState::Pet));
 }
 
 void stopBodyMotion(bool releaseServos) {
@@ -615,12 +623,50 @@ void startJoyMotion() {
 }
 
 void triggerPetHappyMotion() {
-  ignoreNextTopClick = true;
+  if (avatarFace.isShowcaseEnabled()) avatarFace.toggleShowcase();
+  if (printerScreenOpen) {
+    petRestorePrinterScreen = true;
+    closePrinterScreen();
+  }
   avatarFace.setExpression(m5avatar::Expression::Happy);
-  avatarFace.showStatus("HAPPY", 1000);
-  avatarFace.returnToDefaultAfter(BODY_JOY_DURATION_MS + 800);
-  showStatusLed(96, 24, 72);
-  startJoyMotion();
+  avatarFace.showStatus(petReaction.level() >= 3 ? "LOVE!" : "HAPPY!", 2200);
+  avatarFace.returnToDefaultAfter(petReaction.remaining(millis()) + 800);
+  showStatusLed(96, 24, 72, petReaction.remaining(millis()));
+  if (calibrationController.data().servoValid && modeUsesBodyMotion() &&
+      !levelHoldActive &&
+      (bodyMotionState != BodyMotionState::Stopped || startBodyMotion(true))) {
+    // Keep the current target and feedback-sync policy when excitement rises.
+    bodyMotionState = BodyMotionState::Pet;
+  }
+  Serial.printf("[pet] stroke level=%u motion=%d\n", petReaction.level(),
+                bodyMotionState == BodyMotionState::Pet);
+}
+
+// Sample every service cycle, including audio callbacks. Never start speech here.
+void updatePetInteraction() {
+  const uint32_t now = millis();
+  const bool enabled = petInteractionReady && !configPortal.isPortalActive() &&
+                       !modeMenuOpen && !settingsInfoOpen && !deviceSetupOpen;
+  const auto& touch = M5StackChan.TouchSensor;
+  const auto& strengths = touch.getIntensities();
+  const uint8_t zones = (strengths[0] ? 1 : 0) | (strengths[1] ? 2 : 0) |
+                        (strengths[2] ? 4 : 0);
+  // wasSwiped() is not const in BSP 1.1.0.
+  if (petReaction.update(now, zones, M5StackChan.TouchSensor.wasSwiped(), enabled)) {
+    petFeedbackPending = true;
+  }
+  if (!enabled) {
+    petFeedbackPending = petRestorePrinterScreen = false;
+    return;
+  }
+  if (petFeedbackPending && (!speaking || petSpeaking)) {
+    petFeedbackPending = false;
+    if (petReaction.active(now)) triggerPetHappyMotion();
+  }
+  if (petRestorePrinterScreen && !petReaction.active(now) && !speaking) {
+    petRestorePrinterScreen = false;
+    if (currentMode == AppMode::Printer) openPrinterScreen();
+  }
 }
 
 void updateBodyMotion() {
@@ -639,6 +685,23 @@ void updateBodyMotion() {
     return;
   }
   bodyMotionLastUpdateAt = now;
+
+  if (bodyMotionState == BodyMotionState::Pet) {
+    if (petReaction.active(now)) {
+      const auto pose = petReaction.pose(now);
+      const int yaw = clampBodyYaw(bodyHomeYaw() + pose.yaw);
+      const int pitch = clampBodyPitch(bodyHomePitch() + pose.pitch);
+      bodyMotionYawTarget = moveTowardByStep(bodyMotionYawTarget, yaw, 48);
+      bodyMotionPitchTarget = moveTowardByStep(bodyMotionPitchTarget, pitch, 30);
+      M5StackChan.Motion.move(bodyMotionYawTarget, bodyMotionPitchTarget, 900);
+      return;
+    }
+    bodyMotionYawBase = bodyHomeYaw();
+    bodyMotionPitchBase = bodyHomePitch();
+    bodyMotionStartedAt = now;
+    bodyMotionState = BodyMotionState::Idle;
+    // Fall through with the previous targets intact for a smooth return.
+  }
 
   if (bodyMotionState == BodyMotionState::Joy) {
     const uint32_t elapsed = now - bodyMotionStartedAt;
@@ -915,6 +978,7 @@ void updateLipSync() {
 // TTS再生中もこれを呼ぶことで、Webサーバの応答などを継続する。
 void serviceApp() {
   M5StackChan.update();    // タッチセンサ・ボタン・LED等の更新
+  updatePetInteraction();  // 撫でる入力は発話中にも取得（発話自体はloopで）
   configPortal.update();   // Webサーバのリクエスト処理
   avatarFace.update();     // アバターのステータス・まばたき・ショーケース更新
   updateLipSync();         // 口パクアニメーション更新
@@ -1169,6 +1233,10 @@ void refreshPrinterScreen() {
 // ブロッキング（TTS 再生中も serviceApp() が回り続ける）。
 void performComment(Comment comment) {
   if (comment.text.isEmpty() || speaking) return;
+  if (comment.priority == CommentPriority::High) {
+    petReaction.cancel();  // 完了・エラーなどの通知を優先する
+    petFeedbackPending = false;
+  }
 
   comment.createdAt = millis();
   commentator.remember(comment);
@@ -1216,6 +1284,44 @@ void performComment(Comment comment) {
   }
   avatarFace.returnToDefaultAfter(holdMs + 500);
   commentBusyUntil = millis() + (voice ? kCommentGapMs : holdMs);
+}
+
+// A short, direct reply to petting. Prefer onboard speech so a sleeping TTS
+// server does not delay the reaction; continue sampling touches during playback.
+bool performPetResponse() {
+  if (speaking || petFeedbackPending || !petReaction.takeSpeech(millis())) return false;
+  static const char* const gentle[] = {
+      "えへへ、なでなでうれしい！", "わあ、ありがとう！もっとなでて！",
+      "なでなで、だいすき！", "きもちいいなあ。ありがとう！"};
+  static const char* const excited[] = {
+      "わあい！うれしくてたまらないよ！", "えへへ、だいすき！ずっといっしょだよ！",
+      "もっともっと、なでなでして！", "しあわせいっぱい！ありがとう！"};
+  static uint8_t reply = 0;
+  const uint8_t level = petReaction.level();
+  const String text = (level >= 3 ? excited : gentle)[reply++ % 4];
+  Comment comment;
+  comment.text = text;
+  comment.mood = CommentMood::Happy;
+  comment.createdAt = millis();
+  commentator.remember(comment);
+  lastCommentText = text;
+  avatarFace.setExpression(m5avatar::Expression::Happy);
+  avatarFace.showStatus(level >= 3 ? "LOVE!" : "HAPPY!", 6000);
+  avatarFace.hud().setCaption(text, 6000);
+  const bool voice = configPortal.config().commentaryVoice &&
+                     (builtinVoice.isReady() || configPortal.isConnected());
+  bool ok = true;
+  if (voice) {
+    petSpeaking = speaking = true;
+    ok = builtinVoice.isReady() ? builtinVoice.speak(text) : speakSentence(text);
+    stopLipSync();
+    speaking = petSpeaking = false;
+    avatarFace.hud().setCaption(text, 2500);
+  }
+  avatarFace.returnToDefaultAfter(petReaction.remaining(millis()) + 800);
+  commentBusyUntil = millis() + kCommentGapMs;
+  Serial.printf("[pet] reply level=%u voice=%d ok=%d\n", level, voice, ok);
+  return true;
 }
 
 // 頭タップ: いまの状況をまとめて話す
@@ -1358,6 +1464,8 @@ bool updatePrinterLed(uint32_t now) {
 // 手動でモードを選んだとき（メニュー・Web）。自動切り替えの記録を消し、
 // 印刷中に MQTT モードから抜けたならこのジョブの間は自動で戻さない。
 void selectModeManually(AppMode mode) {
+  petReaction.cancel();
+  petFeedbackPending = petRestorePrinterScreen = false;
   printerModeAuto = false;
   if (mode != AppMode::Printer && printerNow.isActive()) {
     autoModeHeldOff = true;
@@ -1368,7 +1476,7 @@ void selectModeManually(AppMode mode) {
 // 印刷が始まったら MQTT モードへ、終わって5分たったら元のモードへ戻す（loop から）。
 // 実況や TTS の途中（serviceApp の中）では切り替えない。
 void updateAutoPrinterMode(uint32_t now) {
-  if (!bambu.isEnabled() || speaking) return;
+  if (!bambu.isEnabled() || speaking || petReaction.active(now)) return;
   const PrinterState& s = printerNow;
   if (!s.synced) return;
 
@@ -1417,39 +1525,24 @@ void onHeadTap() {
 }
 
 // 頭部タッチセンサの入力を処理する。
-// スワイプでパレット切り替え、ダブルクリックで目パターン、3回クリックで変形、
+// 撫でる反応はserviceAppで処理。ダブルクリックで目パターン、3回クリックで変形、
 // 長押しでショーケース、シングルクリックでTTS読み上げ。
 void handleTopTouch() {
   auto& touch = M5StackChan.TouchSensor;
 
-  // スワイプは単独で処理し、後のクリック判定を無効化する
-  if (touch.wasSwipedForward()) {
-    ignoreNextTopClick = true;
-    avatarFace.nextPalette(1); // 前方スワイプ: 次のパレット
-    triggerPetHappyMotion();
-  } else if (touch.wasSwipedBackward()) {
-    ignoreNextTopClick = true;
-    avatarFace.nextPalette(-1); // 後方スワイプ: 前のパレット
-    triggerPetHappyMotion();
-  }
+  // Stroking must not also become a click, eye change or showcase hold.
+  if (petReaction.suppressesClicks(millis())) return;
 
   if (touch.wasDoubleClicked()) {
-    ignoreNextTopClick = false;
     avatarFace.nextEyePattern(); // ダブルクリック: 次の目パターン
   } else if (touch.wasSingleClicked()) {
-    if (ignoreNextTopClick) {
-      ignoreNextTopClick = false; // スワイプ後の誤クリックを無視
-    } else {
-      onHeadTap(); // シングルクリック: 状況報告 or TTS読み上げ
-    }
+    onHeadTap(); // シングルクリック: 状況報告 or TTS読み上げ
   } else if (touch.wasDecideClickCount() &&
              touch.getClickCount() >= 3) {
-    ignoreNextTopClick = false;
     avatarFace.nextTransform(); // 3回以上クリック: 次の変形パターン
   }
 
   if (touch.wasHold()) {
-    ignoreNextTopClick = false;
     avatarFace.toggleShowcase(); // 長押し: ショーケースモード切り替え
   }
 }
@@ -1970,6 +2063,8 @@ bool handleDisplayTouch() {
     if (bambu.isEnabled() && abs(verticalTravel) < 20 &&
         horizontalTravel < 20 && duration <= 600 &&
         displayTouchStartY < height - 44) {
+      petReaction.cancel();
+      petFeedbackPending = petRestorePrinterScreen = false;
       openPrinterScreen();
       displayWasTouching = false;
       return false;
@@ -2331,6 +2426,7 @@ void setup() {
   // 印刷中なら、状態が届いたところで updateAutoPrinterMode() が MQTT モードへ移す
   Serial.println("Mode default: LOCAL LLM");
   greetOnBoot();
+  petInteractionReady = true;
 }
 
 // メインループ。約5ms間隔で繰り返し実行される。
@@ -2384,6 +2480,8 @@ void loop() {
   // MQTT モード以外では細かい実況（Low: 工程・温度・定期報告など）は喋らず、
   // Web の実況ログにだけ残す。
   if (!speaking && commentator.hasComment() &&
+      (!petReaction.active(millis()) ||
+       commentator.peekPriority() == CommentPriority::High) &&
       (static_cast<int32_t>(millis() - commentBusyUntil) >= 0 ||
        commentator.peekPriority() == CommentPriority::High)) {
     Comment comment = commentator.popComment();
@@ -2394,6 +2492,11 @@ void loop() {
     } else {
       performComment(comment);
     }
+    delay(5);
+    return;
+  }
+
+  if (performPetResponse()) {
     delay(5);
     return;
   }

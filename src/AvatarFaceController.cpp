@@ -169,7 +169,7 @@ void AvatarFaceController::update() {
   // ステータスの自動消去（durationMs指定の場合）
   if (statusClearAt_ != 0 &&
       static_cast<int32_t>(now - statusClearAt_) >= 0) {
-    avatar_.setSpeechText("");
+    applySpeechText("");
     statusClearAt_ = 0;
   }
 
@@ -321,12 +321,12 @@ void AvatarFaceController::showStatus(const char* text,
                                       uint32_t durationMs) {
   if (hud_.isVisible()) {
     // 吹き出しは HUD 下段と重なるので、HUD のトースト表示へ回す
-    avatar_.setSpeechText("");
+    applySpeechText("");
     hud_.setToast(text, durationMs);
     statusClearAt_ = 0;
     return;
   }
-  avatar_.setSpeechText(text);
+  applySpeechText(text);
   statusClearAt_ = durationMs == 0 ? 0 : millis() + durationMs;
 }
 
@@ -342,7 +342,7 @@ void AvatarFaceController::setHudVisible(bool visible) {
   data.visible = visible;
   hud_.set(data);
   if (visible) {
-    avatar_.setSpeechText("");
+    applySpeechText("");
     applyTransform();  // 呼吸ズームで変わったスケールを戻す
   }
 }
@@ -418,7 +418,7 @@ void AvatarFaceController::resetToDefault() {
   eyePatternIndex_ = 0;  // AutoBlink
   transformPatternIndex_ = 0; // Normal
 
-  avatar_.setSpeechText("");
+  applySpeechText("");
   hud_.setToast("", 0);
   avatar_.setMouthOpenRatio(0.0f);
   applyFace();
@@ -527,6 +527,14 @@ void AvatarFaceController::applyExpression() {
   if (faceFrameMutex) xSemaphoreTake(faceFrameMutex, portMAX_DELAY);
   avatar_.setExpression(kExpressions[expressionIndex_]);
   if (faceFrameMutex) xSemaphoreGive(faceFrameMutex);
+}
+
+void AvatarFaceController::applySpeechText(const char* text) {
+  // pauseDrawing() 中は呼び出し側が既に同じ mutex を保持している。
+  const bool lock = started_ && !drawingPaused_ && faceFrameMutex;
+  if (lock) xSemaphoreTake(faceFrameMutex, portMAX_DELAY);
+  avatar_.setSpeechText(text);
+  if (lock) xSemaphoreGive(faceFrameMutex);
 }
 
 void AvatarFaceController::applyFace() {
