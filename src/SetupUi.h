@@ -13,9 +13,10 @@ constexpr uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 constexpr uint16_t kBg = rgb565(14, 16, 20);
-constexpr uint16_t kCard = rgb565(30, 34, 43);
-constexpr uint16_t kCardHi = rgb565(48, 54, 68);
-constexpr uint16_t kLine = rgb565(52, 58, 72);
+// Keep these levels distinct after RGB332 quantization on the 8bit canvas.
+constexpr uint16_t kCard = rgb565(32, 32, 64);
+constexpr uint16_t kCardHi = rgb565(64, 64, 128);
+constexpr uint16_t kLine = rgb565(64, 64, 64);
 constexpr uint16_t kText = rgb565(233, 235, 241);
 constexpr uint16_t kSub = rgb565(139, 146, 163);
 constexpr uint16_t kGreen = rgb565(74, 222, 128);

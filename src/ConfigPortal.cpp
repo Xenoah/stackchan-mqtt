@@ -1021,7 +1021,7 @@ String ConfigPortal::apiStatusJson() {
   }
 
   String j;
-  j.reserve(400);
+  j.reserve(640);
   j += F("{\"ok\":true,\"connected\":");
   j += isConnected() ? F("true") : F("false");
   j += F(",\"speaking\":");
@@ -1048,6 +1048,12 @@ String ConfigPortal::apiStatusJson() {
   j += String(runtimeStatus_.maxAllocHeap);
   j += F(",\"free_psram\":");
   j += String(runtimeStatus_.freePsram);
+  j += F(",\"ui_frames\":");
+  j += String(runtimeStatus_.uiFrames);
+  j += F(",\"ui_pixels\":");
+  j += String(runtimeStatus_.uiPixels);
+  j += F(",\"uptime_ms\":");
+  j += String(millis());
   j += F("}");
   return j;
 }

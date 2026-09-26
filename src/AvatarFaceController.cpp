@@ -104,35 +104,21 @@ namespace {
 // 顔の描画タスクのスタック。m5stack-avatar の drawLoop は 2KB しかなく、
 // 顔の上に HUD（日本語の字幕・温度など）を描くとあふれて再起動していた
 constexpr uint32_t kFaceDrawStackBytes = 8192;
+SemaphoreHandle_t faceFrameMutex = nullptr;
 
-// m5stack-avatar の drawLoop と同じく、描いては 10ms 待つ
+// 20fpsで十分な顔アニメーション。描画時間を含めて周期を制限する。
 void faceDrawTask(void* arg) {
   auto* avatar = static_cast<m5avatar::Avatar*>(arg);
   for (;;) {
+    const uint32_t started = millis();
+    xSemaphoreTake(faceFrameMutex, portMAX_DELAY);
     avatar->draw();
-    vTaskDelay(pdMS_TO_TICKS(10));
+    xSemaphoreGive(faceFrameMutex);
+    const uint32_t elapsed = millis() - started;
+    vTaskDelay(pdMS_TO_TICKS(elapsed < 50 ? 50 - elapsed : 1));
   }
 }
 
-// 描画タスクがフレームを描き終えて待ち（Blocked）に入ったところで止める。
-// 確認から停止までの間に割り込まれないよう、この間だけ自分（同じコアのメインループ）の
-// 優先度を上げる。
-void suspendBetweenFrames(TaskHandle_t task) {
-  const UBaseType_t priority = uxTaskPriorityGet(nullptr);
-  const uint32_t startedAt = millis();
-  while (true) {
-    vTaskPrioritySet(nullptr, configMAX_PRIORITIES - 1);
-    const eTaskState state = eTaskGetState(task);
-    const bool between = state == eBlocked || state == eSuspended;
-    if (between || millis() - startedAt > 500) {
-      vTaskSuspend(task);
-      vTaskPrioritySet(nullptr, priority);
-      return;
-    }
-    vTaskPrioritySet(nullptr, priority);
-    vTaskDelay(1);  // 描きかけのフレームを描き終えてもらう
-  }
-}
 
 }  // namespace
 
@@ -157,9 +143,11 @@ void AvatarFaceController::begin() {
   // 断片化すると確保に失敗し、しばらく動かすとクラッシュする原因になる。
   // colorDepth=1 にすると約9.6KB/フレームに減り、断片化に強くなる
   // （見た目は StackChan 本来の2トーン表示。パレットの前景/背景色は反映される）。
-  avatar_.init(1);            // 描画タスク起動（1bit スプライトで省メモリ・安定）
+  if (!replaceDrawTask()) {
+    Serial.println("[face] drawing task allocation failed");
+    return;
+  }
   started_ = true;
-  replaceDrawTask();
 
   // 初期状態を全パラメータに適用する
   applyFace();
@@ -366,26 +354,40 @@ void AvatarFaceController::pauseDrawing() {
     return;
   }
   drawingPaused_ = true;
-  if (m5avatar::drawTaskHandle != nullptr) {
-    suspendBetweenFrames(m5avatar::drawTaskHandle);
+  if (faceFrameMutex) {
+    // Face::draw() yields while DMA still owns the LCD. A Blocked task state
+    // does not mean a completed frame. Wait for the renderer to release it.
+    xSemaphoreTake(faceFrameMutex, portMAX_DELAY);
   }
 }
 
-void AvatarFaceController::replaceDrawTask() {
+bool AvatarFaceController::replaceDrawTask() {
+  faceFrameMutex = xSemaphoreCreateMutex();
+  if (!faceFrameMutex) return false;
+  // All avatar tasks use APP_CPU_NUM, as does Arduino's loop task. Keep the
+  // library's 2KB draw task from running even once before replacing it.
+  const UBaseType_t priority = uxTaskPriorityGet(nullptr);
+  vTaskPrioritySet(nullptr, configMAX_PRIORITIES - 1);
+  avatar_.init(1);
   TaskHandle_t library = m5avatar::drawTaskHandle;
-  if (library == nullptr) return;
-  suspendBetweenFrames(library);  // フレームの途中（LCD をつかんだまま）では消さない
   // 顔の描画はメインループ（優先度1）より後回し（優先度0）にする。メニュー・設定画面・
   // タッチの処理を先に済ませ、顔は空いた時間に描く。ハンドルは m5stack-avatar の
   // suspend()/resume()（setExpression が使う）からもこのタスクを指すよう差し替える
   TaskHandle_t task = nullptr;
   if (xTaskCreatePinnedToCore(faceDrawTask, "faceDraw", kFaceDrawStackBytes, &avatar_,
                               0, &task, APP_CPU_NUM) != pdPASS) {
-    vTaskResume(library);  // 作れなければライブラリのタスクのまま
-    return;
+    avatar_.stop();
+    if (library) vTaskDelete(library);
+    m5avatar::drawTaskHandle = nullptr;
+    vSemaphoreDelete(faceFrameMutex);
+    faceFrameMutex = nullptr;
+    vTaskPrioritySet(nullptr, priority);
+    return false;
   }
   m5avatar::drawTaskHandle = task;
-  vTaskDelete(library);
+  if (library) vTaskDelete(library);
+  vTaskPrioritySet(nullptr, priority);
+  return true;
 }
 
 uint32_t AvatarFaceController::drawStackFree() const {
@@ -397,12 +399,13 @@ void AvatarFaceController::resumeDrawing() {
   if (!started_ || !drawingPaused_) {
     return;
   }
-  avatar_.resume();
-  drawingPaused_ = false;
   if (expressionPending_) {
     expressionPending_ = false;
-    applyExpression();
+    avatar_.setExpression(kExpressions[expressionIndex_]);
   }
+  drawingPaused_ = false;
+  if (faceFrameMutex) xSemaphoreGive(faceFrameMutex);
+  else avatar_.resume();
 }
 
 // 全パラメータをデフォルト値にリセットする。
@@ -514,13 +517,16 @@ void AvatarFaceController::initializePalettes() {
 }
 
 void AvatarFaceController::applyExpression() {
+  if (!started_) return;
   // m5stack-avatar の setExpression() は描画タスクを止めて必ず再開する。
   // メニューなどで止めている間に呼ぶと顔が UI の上に描かれてしまうので、再開まで待つ
   if (drawingPaused_) {
     expressionPending_ = true;
     return;
   }
+  if (faceFrameMutex) xSemaphoreTake(faceFrameMutex, portMAX_DELAY);
   avatar_.setExpression(kExpressions[expressionIndex_]);
+  if (faceFrameMutex) xSemaphoreGive(faceFrameMutex);
 }
 
 void AvatarFaceController::applyFace() {

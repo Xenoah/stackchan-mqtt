@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "PrinterJson.h"
+#include "SetupUi.h"
 
 namespace {
 
@@ -13,9 +14,9 @@ constexpr uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
   return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
-constexpr uint16_t kBg = rgb(14, 16, 20);
-constexpr uint16_t kCard = rgb(23, 26, 33);
-constexpr uint16_t kLine = rgb(38, 43, 53);
+constexpr uint16_t kBg = setupui::kBg;
+constexpr uint16_t kCard = setupui::kCard;
+constexpr uint16_t kLine = setupui::kLine;
 constexpr uint16_t kText = rgb(233, 235, 241);
 constexpr uint16_t kSub = rgb(139, 146, 163);
 constexpr uint16_t kGreen = rgb(74, 222, 128);
@@ -213,4 +214,83 @@ void drawPrinterScreen(M5Canvas& c, const PrinterState& s,
     drawFitted(c, lastComment.isEmpty() ? String("タップで顔に戻ります") : lastComment,
                12, 223, w - 24);
   }
+}
+
+namespace {
+
+// Hash only information shown on this screen. MQTT keep-alives and sub-degree
+// temperature changes must not cause a redraw. Hash fields, never struct padding.
+uint64_t screenKey(const PrinterState& s, const String& comment, bool voice) {
+  uint64_t key = 14695981039346656037ULL;
+  auto bytes = [&](const void* p, size_t n) {
+    const auto* data = static_cast<const uint8_t*>(p);
+    while (n--) { key ^= *data++; key *= 1099511628211ULL; }
+  };
+  auto value = [&](int32_t v) { bytes(&v, sizeof(v)); };
+  auto text = [&](const char* p) { bytes(p, strlen(p) + 1); };
+  value(static_cast<int>(s.link)); value(s.synced); value(voice);
+  value(static_cast<int>(s.phase)); value(s.percent); value(s.remainingMin);
+  value(s.layer); value(s.totalLayers); value(s.stage);
+  value(static_cast<int>(s.speed)); value(s.wifiDbm);
+  text(s.jobName);
+  for (float t : {s.nozzleTemp, s.nozzleTarget, s.bedTemp, s.bedTarget}) {
+    value(isnan(t) ? INT32_MIN : static_cast<int32_t>(lroundf(t)));
+  }
+  value(s.amsCount); value(s.trayNow);
+  if (s.amsCount) {
+    for (const AmsTray& t : s.trays[0]) {
+      value(t.present); value(t.color); text(t.type);
+    }
+  } else {
+    value(s.partFan); value(s.auxFan); value(s.chamberFan);
+  }
+  value(s.hmsCount);
+  if (s.hmsCount) { value(s.hms[0].attr); value(s.hms[0].code); }
+  else text(comment.c_str());
+  if (s.isActive()) text(etaClockShort(s.remainingMin).c_str());
+  return key;
+}
+
+}  // namespace
+
+void PrinterScreenRenderer::draw(M5Canvas& canvas, const PrinterState& state,
+                                  const String& comment, bool voice) {
+  const uint64_t key = screenKey(state, comment, voice);
+  if (valid_ && key == stateKey_) return;
+  drawPrinterScreen(canvas, state, comment, voice);
+  ++frames_;
+  // CoreS3 is 320x240. Keep a full transfer fallback for other screen sizes.
+  if (canvas.height() != 240 || canvas.getBuffer() == nullptr) {
+    canvas.pushSprite(0, 0);
+    pixels_ += canvas.width() * canvas.height();
+    valid_ = false;
+    return;
+  }
+  const size_t stride = canvas.bufferLength() / canvas.height();
+  const auto* buffer = static_cast<const uint8_t*>(canvas.getBuffer());
+  int first = -1;
+  for (int strip = 0; strip <= 15; ++strip) {
+    bool changed = false;
+    if (strip < 15) {
+      uint32_t hash = 2166136261UL;
+      const uint8_t* data = buffer + strip * 16 * stride;
+      for (size_t i = 0; i < 16 * stride; ++i) {
+        hash = (hash ^ data[i]) * 16777619UL;
+      }
+      changed = !valid_ || hash != strips_[strip];
+      strips_[strip] = hash;
+    }
+    if (changed && first < 0) first = strip;
+    if (!changed && first >= 0) {
+      const int y = first * 16;
+      const int height = (strip - first) * 16;
+      M5.Display.setClipRect(0, y, canvas.width(), height);
+      canvas.pushSprite(0, 0);
+      pixels_ += canvas.width() * height;
+      first = -1;
+    }
+  }
+  M5.Display.clearClipRect();
+  stateKey_ = key;
+  valid_ = true;
 }

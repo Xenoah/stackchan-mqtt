@@ -8,7 +8,7 @@ M5Stack StackChan（K151 / CoreS3）が **Bambu Lab P1S の印刷をリアルタ
 - プリンタ通信: [Xenoah/ESP32-bambu-MQTT](https://github.com/Xenoah/ESP32-bambu-MQTT)
   の Bambu Lab LAN MQTT 実装を StackChan 向けに再構成
 
-**現在のリリース: [v2.3.2](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.3.2)（プレリリース）**
+**現在のリリース: [v2.4.0](https://github.com/Xenoah/stackchan-mqtt/releases/tag/v2.4.0)（プレリリース）**
 
 ```mermaid
 flowchart LR
@@ -23,7 +23,7 @@ flowchart LR
 > [!NOTE]
 > **内蔵ボイス**（VOICEVOX で作ったずんだもんの声を本体に焼き込んだもの）があれば、
 > PC やスマホの TTS サーバーなしで StackChan 単体で実況します。実況の決まり文句は録音どおりの
-> 自然な声で、それ以外の**日本語・英語の文章もすべて**本体の読み辞書で読んでモーラ（1拍の音）を
+> 自然な声で、それ以外の**日本語・英語の自由文も**本体の読み辞書で読んでモーラ（1拍の音）を
 > つなげて喋ります。TTS サーバーを使う場合も、サーバーにつながらないときは自動で内蔵ボイスに切り替わります。
 > StackChan とプリンターは同じ LAN にある必要があります。
 
@@ -132,7 +132,7 @@ microSD スロット付近の RST ボタンを約3秒長押ししてダウンロ
 Wi-Fi 設定・キャリブレーションを保存している NVS も消えるので、初回セットアップからになります。
 
 ```powershell
-python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.3.2-full.bin
+python -m esptool --chip esp32s3 --port COM4 --baud 921600 write_flash 0x0 stackchan-mqtt-v2.4.0-full.bin
 ```
 
 **アップデート（設定を残す）**: 4つのファイルをそれぞれのアドレスに書き込みます。NVS（0x9000〜）には触れません。
@@ -178,19 +178,29 @@ python tools/make_voice_pack.py          # data/voice.pak を作る（初回 5�
 | 数字 | 日本語の数として読み、助数詞の音の変化も付けます（1分 → イップン、3本 → サンボン、2人 → フタリ、4時 → ヨジ、1億3,000万 → イチオクサンゼンマン） |
 | 英語 | 英語辞書（`dict/en.dic`、CMU 発音辞書の頻出語）で発音を引き、カタカナ読みにします（computer → コンピューター）。辞書に無い語は綴りから発音を推定し（CMU 辞書で学習した決定木）、ローマ字として読める語（zundamon → ズンダモン）はローマ字読み、大文字の略語（PLA, AMS）はアルファベット読みにします |
 | 記号 | % ℃ & + = @ # × ÷ などを読み、句読点は間にします |
-| 音 | 東京方言の高低（アクセント）に合わせて高い音・低い音のモーラを選び、5ms 重ねてつなげます |
+| 音 | アクセントに合わせた音を選び、母音の波形周期に合わせて重ねる処理（PSOLA）で音程と長さを調整します。子音を保ち、句頭の立ち上がり・句末の伸び・疑問文の上昇を付け、モーラ間は5ms重ねます。長音は直前の母音部分を使い、発音し直さず伸ばします |
 
 VOICEVOX の解析結果と比べた読みの誤り（モーラ単位）は、Wikipedia などの一般的な文で約 1.7%、
 実況の文で約 0.8% です。音の高さ（アクセント）の違いは約 4% です。
+
+v2.4.0 は本体単体で音のつながりと抑揚を改善しています。固有名詞・未知語の読みや、
+すべての単語が人の発話と同じ自然さになることまでは保証しません。英語は引き続き
+カタカナ発音です。文章全体の自然な合成を優先する場合は既存の VOICEVOX 接続も使えます。
+v2.3.x のモーラ入りボイスパックをそのまま利用でき、今回の更新だけなら `uploadfs` は不要です。
 
 PC で同じ処理を試せます（`python -m pip install ziglang` で C++ コンパイラを入れる）:
 
 ```powershell
 python tools/talk_test/run.py "今日は3時に1分だけ休憩して、PETGで印刷するよ"
 python tools/talk_test/run.py --wav sample.wav "Hello! 今日もいい天気だね"   # data/voice.pak で音声を作る
+python tools/talk_test/run.py --legacy --wav before.wav "Hello! 今日もいい天気だね" # 旧方式と比較
+python tools/talk_test/run.py --self-test # 音程・音長・子音保持・長音・無声化の波形テスト
 ```
 
 読み辞書は `python tools/make_dict.py` で作り直せます（通常は不要。リポジトリの `dict/` に入っています）。
+
+PCのWAVプレビューは、本体と共通の `SpeechSynth` でモーラ合成を確認します。
+本体で既存の自然なフレーズクリップを選ぶ経路とは別の、自由文合成の比較用です。
 
 資格情報はソースに書かず、すべて Web 設定画面から本体の NVS に保存します。
 

@@ -65,6 +65,8 @@ class FaceHud {
   // 字幕の行数キャッシュ（描画タスクだけが触る）
   uint32_t cachedSince_ = UINT32_MAX;
   int cachedLines_ = 1;
+  char cachedCaption_[192] = "";
+  uint8_t lineStarts_[193] = {};  // byte offsets; caption is at most 191 bytes
 };
 
 // 顔の口パーツを包み、口を描いたあとに HUD を重ねる Drawable。

@@ -176,7 +176,7 @@ void FaceHud::drawBottom(M5Canvas* c, const HudData& d, const char* caption,
   if (caption[0] != '\0') {
     c->fillRect(0, kBottomTop, kWidth, kHeight - kBottomTop, bg);
     c->drawFastHLine(8, kBottomTop, kWidth - 16, fg);
-    if (captionSince != cachedSince_) {
+    if (captionSince != cachedSince_ || strcmp(caption, cachedCaption_) != 0) {
       cachedSince_ = captionSince;
       cachedLines_ = drawWrapped(c, caption, 8, 0, kWidth - 16, 18, 0, 0, fg, bg);
     }
@@ -260,37 +260,57 @@ int FaceHud::drawWrapped(M5Canvas* c, const char* text, int x, int y,
                          int lines, uint16_t fg, uint16_t bg) {
   c->setTextColor(fg, bg);
   c->setTextDatum(top_left);
-  int line = 0;
-  int cx = x;
-  char glyph[5];
-  for (const char* p = text; *p != '\0';) {
-    const size_t len = utf8Length(static_cast<uint8_t>(*p));
-    size_t n = 0;
-    while (n < len && p[n] != '\0') {
-      glyph[n] = p[n];
-      ++n;
+  if (lines == 0) {
+    // Lay out once per caption. Rendering subsequent frames needs only two
+    // complete drawString calls, with no per-glyph width measurements.
+    strncpy(cachedCaption_, text, sizeof(cachedCaption_) - 1);
+    cachedCaption_[sizeof(cachedCaption_) - 1] = '\0';
+    int line = 0;
+    int width = 0;
+    lineStarts_[0] = 0;
+    size_t pos = 0;
+    while (cachedCaption_[pos]) {
+      char glyph[5] = {};
+      size_t n = 0;
+      const size_t len = utf8Length(static_cast<uint8_t>(cachedCaption_[pos]));
+      while (n < len && cachedCaption_[pos + n]) {
+        glyph[n] = cachedCaption_[pos + n];
+        ++n;
+      }
+      if (glyph[0] == '\n') {
+        lineStarts_[++line] = pos + n;
+        width = 0;
+      } else {
+        const int w = c->textWidth(glyph);
+        if (width + w > maxWidth && width > 0 && !isClosingPunctuation(glyph)) {
+          lineStarts_[++line] = pos;
+          width = 0;
+          if (glyph[0] == ' ') {
+            lineStarts_[line] = pos + n;
+            pos += n;
+            continue;
+          }
+        }
+        width += w;
+      }
+      pos += n;
     }
-    glyph[n] = '\0';
-    p += n;
-
-    if (glyph[0] == '\n') {
-      ++line;
-      cx = x;
-      continue;
-    }
-    const int w = c->textWidth(glyph);
-    if (cx + w > x + maxWidth && cx > x && !isClosingPunctuation(glyph)) {
-      ++line;
-      cx = x;
-      if (glyph[0] == ' ') continue;
-    }
-    const int drawLine = line - skipLines;
-    if (lines > 0 && drawLine >= 0 && drawLine < lines) {
-      c->drawString(glyph, cx, y + drawLine * lineHeight);
-    }
-    cx += w;
+    lineStarts_[line + 1] = pos;
+    cachedLines_ = line + 1;
+    return cachedLines_;
   }
-  return line + 1;
+  char lineText[sizeof(cachedCaption_)];
+  for (int i = skipLines; i < cachedLines_ && i < skipLines + lines; ++i) {
+    const size_t begin = lineStarts_[i];
+    size_t end = lineStarts_[i + 1];
+    while (end > begin && (cachedCaption_[end - 1] == '\n' ||
+                          cachedCaption_[end - 1] == '\r' ||
+                          cachedCaption_[end - 1] == ' ')) --end;
+    memcpy(lineText, cachedCaption_ + begin, end - begin);
+    lineText[end - begin] = '\0';
+    c->drawString(lineText, x, y + (i - skipLines) * lineHeight);
+  }
+  return cachedLines_;
 }
 
 void HudMouth::draw(M5Canvas* spi, m5avatar::BoundingRect rect,

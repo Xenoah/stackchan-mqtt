@@ -75,6 +75,8 @@ struct RuntimeStatus {
   uint32_t minFreeHeap = 0;     // 起動以降の最小空きヒープ（バイト）
   uint32_t maxAllocHeap = 0;    // 確保可能な最大連続ブロック（フラグメント指標）
   uint32_t freePsram = 0;       // 空きPSRAM（バイト）
+  uint32_t uiFrames = 0;       // プリンター詳細画面を描いた回数
+  uint32_t uiPixels = 0;       // LCDへ転送したプリンター画面のピクセル数
   bool cameraActive = false;    // カメラ目線が動作中かどうか
   uint16_t voiceClips = 0;      // 内蔵ボイスのクリップ数（0 = 未書き込み）
   bool voiceFreeText = false;   // 内蔵ボイスでどんな文章も読める（モーラの音と読み辞書あり）

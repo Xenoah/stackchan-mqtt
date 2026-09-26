@@ -33,7 +33,9 @@ def build() -> None:
         data = urllib.request.urlopen(MINIZ_URL, timeout=60).read()
         zipfile.ZipFile(io.BytesIO(data)).extractall(CACHE)
     sources = sorted((ROOT / "src" / "talk").glob("*.cpp"))
-    newest = max(p.stat().st_mtime for p in sources + [pathlib.Path(__file__).with_name("talk_test.cpp")])
+    headers = sorted((ROOT / "src" / "talk").glob("*.h")) + list(pathlib.Path(__file__).parent.glob("*.h"))
+    newest = max(p.stat().st_mtime for p in sources + headers +
+                 [pathlib.Path(__file__), pathlib.Path(__file__).with_name("talk_test.cpp")])
     if EXE.exists() and EXE.stat().st_mtime > newest:
         return
     miniz_obj = CACHE / "miniz.o"
@@ -159,7 +161,14 @@ def mulaw(b: int) -> int:
     return -s if sign else s
 
 
-def render_wav(text: str, out: pathlib.Path) -> None:
+def render_wav(text: str, out: pathlib.Path, legacy: bool = False) -> None:
+    if not legacy:
+        build()
+        subprocess.run([str(EXE), str(ROOT / "dict" / "ja.dic"), str(ROOT / "dict" / "en.dic"),
+                        "--wav", str(ROOT / "data" / "voice.pak"), str(out)],
+                       input=(text + "\n").encode("utf-8"), check=True)
+        print(f"wrote {out} (firmware's shared prosody / waveform renderer)")
+        return
     import struct
     import wave
     data, rate, clips = load_pack(ROOT / "data" / "voice.pak")
@@ -204,10 +213,16 @@ def main() -> int:
     parser.add_argument("--eval", help="VOICEVOX の読みを入れた JSON（{文: {kana: ...}}）")
     parser.add_argument("--show", type=int, default=10)
     parser.add_argument("--wav", help="data/voice.pak のモーラで音声を作って書き出す（text を1つ指定）")
+    parser.add_argument("--legacy", action="store_true", help="--wav で旧方式の比較用音声を出す")
+    parser.add_argument("--self-test", action="store_true", help="音程・長さ・長音・無声化の波形テスト")
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    if args.self_test:
+        build()
+        subprocess.run([str(EXE), "--self-test"], check=True)
+        return 0
     if args.wav:
-        render_wav(" ".join(args.text), pathlib.Path(args.wav))
+        render_wav(" ".join(args.text), pathlib.Path(args.wav), legacy=args.legacy)
         return 0
     if args.eval:
         evaluate(json.loads(pathlib.Path(args.eval).read_text(encoding="utf-8")), args.show)

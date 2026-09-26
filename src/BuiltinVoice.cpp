@@ -4,6 +4,7 @@
 #include <M5Unified.h>
 
 #include "talk/EnReader.h"
+#include "talk/BlockStore.h"
 #include "talk/JaDict.h"
 #include "talk/Kana.h"
 #include "talk/TextReader.h"
@@ -23,19 +24,18 @@ constexpr uint8_t kCodecMulaw = 1;
 // 再生バッファ（TtsClient と同じく3面を回し、再生中・再生待ち・書き込み中に使い分ける）
 constexpr size_t kBufferCount = 3;
 constexpr size_t kBufferSamples = 1024;
-alignas(4) int16_t pcmBuffers[kBufferCount][kBufferSamples];
-uint8_t rawBuffer[kBufferSamples];
-int16_t decodeBuffer[kBufferSamples];
+int16_t (*pcmBuffers)[kBufferSamples] = nullptr;
+uint8_t* rawBuffer = nullptr;
+int16_t* decodeBuffer = nullptr;
 
 // モーラどうしを重ねる長さ（12kHz で約 5ms）
-constexpr size_t kOverlapSamples = 60;
-int16_t tailBuffer[kOverlapSamples];
+constexpr size_t kMaxOverlapSamples = 240;  // 5ms at the maximum 48kHz pack rate
+int16_t tailBuffer[kMaxOverlapSamples];
 
 // 文の区切りの間（ms）
 constexpr uint16_t kSentencePauseMs = 220;
 constexpr uint16_t kCommaPauseMs = 110;
 constexpr uint16_t kAfterSentenceClipPauseMs = 150;
-constexpr uint16_t kSokuonMs = 70;  // 促音「ッ」の間
 
 // モーラの音のキー（make_voice_pack.py と同じ）
 constexpr char kMoraLow = '\x01';
@@ -129,6 +129,19 @@ bool isSilentChar(const char* s, size_t remaining) {
 bool BuiltinVoice::begin() {
   ready_ = false;
   moraReady_ = false;
+  if (!pcmBuffers) {
+    // Speaker_Class reads these samples into its own I2S buffers. They do not
+    // need DMA-capable internal RAM; keep 9KiB available for Wi-Fi/TLS instead.
+    const size_t pcmBytes = kBufferCount * kBufferSamples * sizeof(int16_t);
+    auto* memory = static_cast<uint8_t*>(talk::allocLarge(pcmBytes + kBufferSamples * 3));
+    if (!memory) {
+      lastError_ = "voice buffer allocation failed";
+      return false;
+    }
+    pcmBuffers = reinterpret_cast<int16_t (*)[kBufferSamples]>(memory);
+    rawBuffer = memory + pcmBytes;
+    decodeBuffer = reinterpret_cast<int16_t*>(rawBuffer + kBufferSamples);
+  }
   if (!LittleFS.begin(false)) {
     lastError_ = "LittleFS mount failed (run: pio run -t uploadfs)";
     return false;
@@ -390,51 +403,36 @@ void BuiltinVoice::planSpeech(const std::string& text, std::vector<Step>& steps)
   if (textReader == nullptr) return;
   talk::Utterance utterance;
   textReader->read(text, utterance);
-  bool joinNext = false;
-  for (const talk::AccentPhrase& phrase : utterance) {
-    char vowel = 0;  // 長音「ー」でのばす母音
-    for (size_t i = 0; i < phrase.moras.size(); ++i) {
-      const talk::Mora& m = phrase.moras[i];
-      const std::string kana = talk::playableMora(m.kana);
-      if (kana == "ッ") {
-        addPause(steps, kSokuonMs);
-        joinNext = false;
-        continue;
-      }
-      const bool high = talk::moraIsHigh(phrase, i) ||
-                        (phrase.question && i + 1 == phrase.moras.size());
-      std::string name = kana;
-      if (kana == "ー") {
-        if (!vowel) continue;
-        name = talk::vowelKana(vowel);
-      } else {
-        const char v = talk::moraVowel(kana);
-        if (v) vowel = v;
-      }
+  std::vector<talk::SpeechUnit> units;
+  talk::planSpeech(utterance, units);
+  for (const talk::SpeechUnit& unit : units) {
+    if (unit.pauseMs) {
+      addPause(steps, unit.pauseMs);
+      continue;
+    }
+    auto append = [&](const std::string& kana, bool join) {
       int clip = -1;
-      if (m.devoiced) {
-        const std::string k = std::string(1, kMoraDevoiced) + name;
-        clip = findKey(k.c_str(), k.size());
+      if (unit.devoiced) {
+        const std::string key = std::string(1, kMoraDevoiced) + kana;
+        clip = findKey(key.c_str(), key.size());
       }
       if (clip < 0) {
-        const std::string k = std::string(1, high ? kMoraHigh : kMoraLow) + name;
-        clip = findKey(k.c_str(), k.size());
+        const std::string key = std::string(1, unit.prosody.high ? kMoraHigh : kMoraLow) + kana;
+        clip = findKey(key.c_str(), key.size());
       }
-      if (clip < 0 && name.size() > 3) {
-        // パックに無い組み合わせ（ヴュ など）は1字目と母音に分けて読む
-        const std::string first = std::string(1, high ? kMoraHigh : kMoraLow) + name.substr(0, 3);
-        addClip(steps, findKey(first.c_str(), first.size()), joinNext);
-        const char v = talk::moraVowel(name);
-        const std::string second = std::string(1, high ? kMoraHigh : kMoraLow) + talk::vowelKana(v);
-        clip = v ? findKey(second.c_str(), second.size()) : -1;
-        joinNext = true;
-      }
-      addClip(steps, clip, joinNext);
-      joinNext = true;
-    }
-    if (phrase.pauseAfterMs > 0) {
-      addPause(steps, phrase.pauseAfterMs);
-      joinNext = false;
+      if (clip < 0) return false;
+      Step step = {static_cast<int16_t>(clip), 0, join};
+      step.mora = true;
+      step.prosody = unit.prosody;
+      // A missing devoiced clip fell back to the voiced sample.
+      step.prosody.voiced = key(clips_[clip])[0] != kMoraDevoiced;
+      steps.push_back(step);
+      return true;
+    };
+    if (!append(unit.kana, unit.join) && unit.kana.size() > 3) {
+      append(unit.kana.substr(0, 3), unit.join);
+      const char vowel = talk::moraVowel(unit.kana);
+      if (vowel) append(talk::vowelKana(vowel), true);
     }
   }
 }
@@ -490,9 +488,11 @@ bool BuiltinVoice::speak(const String& text) {
   }
 
   Serial.printf("[voice] builtin: %u steps\n", static_cast<unsigned>(steps.size()));
+  talk::MoraRenderer renderer;
   bool ok = true;
   bufferFill_ = 0;
   tailLen_ = 0;
+  maxMoraUs_ = 0;
   for (size_t k = 0; k < steps.size(); ++k) {
     const Step& step = steps[k];
     if (step.clip < 0) {
@@ -501,7 +501,8 @@ bool BuiltinVoice::speak(const String& text) {
     }
     // 次がつなげるモーラなら末尾を取っておいて重ねる
     const bool holdTail = k + 1 < steps.size() && steps[k + 1].join;
-    if (!playClip(clips_[step.clip], step.join, holdTail)) {
+    if (!(step.mora ? playMora(step, holdTail, renderer)
+                    : playClip(clips_[step.clip], step.join, holdTail))) {
       ok = false;
       break;
     }
@@ -513,6 +514,7 @@ bool BuiltinVoice::speak(const String& text) {
     delay(5);
   }
   if (lipSync_) lipSync_(0);
+  Serial.printf("[voice] complete: ok=%u max_mora_us=%u\n", ok, maxMoraUs_);
   return ok;
 }
 
@@ -561,6 +563,87 @@ void BuiltinVoice::flushBuffer() {
   }
 }
 
+bool BuiltinVoice::playMora(const Step& step, bool holdTail,
+                            talk::MoraRenderer& renderer) {
+  const Clip& clip = clips_[step.clip];
+  // A corrupt pack must not turn a tiny mora into an unbounded allocation.
+  if (clip.samples > rate_ / 2) return playClip(clip, step.join, holdTail);
+  int16_t* input = renderer.input(clip.samples);
+  if (!input) {
+    lastError_ = "mora buffer allocation failed";
+    return false;
+  }
+  if (!file_.seek(dataStart_ + clip.dataOffset)) {
+    lastError_ = "voice pack seek failed";
+    return false;
+  }
+  int predictor = clip.predictor;
+  int stepIndex = clip.stepIndex;
+  for (size_t pos = 0; pos < clip.samples;) {
+    const size_t count = std::min<size_t>(kBufferSamples, clip.samples - pos);
+    if (!decodeSamples(input + pos, count, predictor, stepIndex)) return false;
+    pos += count;
+  }
+  size_t total = 0;
+  const uint32_t started = micros();
+  const int16_t* pcm = renderer.render(clip.samples, rate_, step.prosody, total);
+  maxMoraUs_ = std::max(maxMoraUs_, static_cast<uint32_t>(micros() - started));
+  if (!pcm) {
+    lastError_ = "mora synthesis failed";
+    return false;
+  }
+  if (!step.join) flushTail();
+  size_t offset = 0;
+  if (step.join && tailLen_) {
+    offset = std::min(tailLen_, total);
+    for (size_t i = 0; i < offset; ++i) {
+      const int32_t w = (i + 1) * 256 / (offset + 1);
+      tailBuffer[i] = (tailBuffer[i] * (256 - w) + pcm[i] * w) / 256;
+    }
+    write(tailBuffer, offset);
+    tailLen_ = 0;
+  }
+  const size_t overlap = std::min<size_t>(kMaxOverlapSamples, rate_ / 200);
+  const size_t hold = holdTail && total - offset > overlap ? overlap : 0;
+  write(pcm + offset, total - offset - hold);
+  if (hold) {
+    memcpy(tailBuffer, pcm + total - hold, hold * sizeof(int16_t));
+    tailLen_ = hold;
+  }
+  return true;
+}
+
+bool BuiltinVoice::decodeSamples(int16_t* out, size_t count, int& predictor, int& stepIndex) {
+  if (codec_ == kCodecMulaw) {
+    if (file_.read(rawBuffer, count) != count) {
+      lastError_ = "voice pack read failed";
+      return false;
+    }
+    for (size_t i = 0; i < count; ++i) out[i] = mulawToLinear(rawBuffer[i]);
+  } else {
+    // count は偶数（最後の端数だけ奇数になり得る）
+    const size_t bytes = (count + 1) / 2;
+    if (file_.read(rawBuffer, bytes) != bytes) {
+      lastError_ = "voice pack read failed";
+      return false;
+    }
+    for (size_t i = 0; i < count; ++i) {
+      const uint8_t code =
+          (i % 2 == 0) ? (rawBuffer[i / 2] & 0x0F) : (rawBuffer[i / 2] >> 4);
+      const int step = kStepTable[stepIndex];
+      int diff = step >> 3;
+      if (code & 4) diff += step;
+      if (code & 2) diff += step >> 1;
+      if (code & 1) diff += step >> 2;
+      predictor += (code & 8) ? -diff : diff;
+      predictor = constrain(predictor, -32768, 32767);
+      stepIndex = constrain(stepIndex + kIndexTable[code], 0, 88);
+      out[i] = static_cast<int16_t>(predictor);
+    }
+  }
+  return true;
+}
+
 bool BuiltinVoice::playClip(const Clip& clip, bool join, bool holdTail) {
   if (!file_.seek(dataStart_ + clip.dataOffset)) {
     lastError_ = "voice pack seek failed";
@@ -568,40 +651,15 @@ bool BuiltinVoice::playClip(const Clip& clip, bool join, bool holdTail) {
   }
   if (!join) flushTail();
   const size_t total = clip.samples;
-  const size_t hold = holdTail && total > kOverlapSamples * 2 ? kOverlapSamples : 0;
+  const size_t overlap = std::min<size_t>(kMaxOverlapSamples, rate_ / 200);
+  const size_t hold = holdTail && total > overlap * 2 ? overlap : 0;
   size_t done = 0;
   int predictor = clip.predictor;
   int stepIndex = clip.stepIndex;
   while (done < total) {
     const size_t count = min<size_t>(total - done, kBufferSamples);
     int16_t* out = decodeBuffer;
-    if (codec_ == kCodecMulaw) {
-      if (file_.read(rawBuffer, count) != count) {
-        lastError_ = "voice pack read failed";
-        return false;
-      }
-      for (size_t i = 0; i < count; ++i) out[i] = mulawToLinear(rawBuffer[i]);
-    } else {
-      // count は偶数（最後の端数だけ奇数になり得る）
-      const size_t bytes = (count + 1) / 2;
-      if (file_.read(rawBuffer, bytes) != bytes) {
-        lastError_ = "voice pack read failed";
-        return false;
-      }
-      for (size_t i = 0; i < count; ++i) {
-        const uint8_t code =
-            (i % 2 == 0) ? (rawBuffer[i / 2] & 0x0F) : (rawBuffer[i / 2] >> 4);
-        const int step = kStepTable[stepIndex];
-        int diff = step >> 3;
-        if (code & 4) diff += step;
-        if (code & 2) diff += step >> 1;
-        if (code & 1) diff += step >> 2;
-        predictor += (code & 8) ? -diff : diff;
-        predictor = constrain(predictor, -32768, 32767);
-        stepIndex = constrain(stepIndex + kIndexTable[code], 0, 88);
-        out[i] = static_cast<int16_t>(predictor);
-      }
-    }
+    if (!decodeSamples(out, count, predictor, stepIndex)) return false;
 
     // 前のモーラの末尾と重ねる（線形のクロスフェード）
     if (done == 0 && join && tailLen_ > 0) {

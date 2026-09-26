@@ -155,7 +155,7 @@ class AvatarFaceController {
   uint32_t blinkOpenAt_ = 0;      // まばたき後に目を開ける時刻
 
   // m5stack-avatar の描画タスク（スタック 2KB 固定）を、スタックの大きい自前のタスクに差し替える
-  void replaceDrawTask();
+  bool replaceDrawTask();
 
   // 7種類の顔型オブジェクトを生成してfaces_[]に格納する
   void initializeFaces();

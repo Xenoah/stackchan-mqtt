@@ -243,6 +243,20 @@ answer_mode=short, kanji_to_kana=true, auto_speak=true, max_history=50。
 | K1 | 顔の描画タスクのスタック | コアダンプ（DebugException、drawLoop の pxTopOfStack が pxStack+136）でスタックあふれを確認。`replaceDrawTask()` がライブラリの drawLoop（2KB）をフレーム間で止めて消し、8KB・優先度0の `faceDraw` を作って `m5avatar::drawTaskHandle` を差し替える | ✅ |
 | K2 | 監視 | `[heap] ... stack face= loop= mqtt=`（uxTaskGetStackHighWaterMark）。実機 30 分: 再起動なし、ヒープ一定、face の最大使用 約 2.7KB | ✅ |
 
+## Part L: UI軽量化・自由文の音声改善（2026-09-26 / v2.4.0）
+
+最新の詳細・実機検証・制限は `agent.md` 第9章を参照。
+
+- UI: PSRAMキャンバスを8bit（75KiB）へ変更し、配色を調整。プリンター画面は表示値が
+  変化した時だけ描き、16行ごとの差分をLCDへ転送（最大5fps）。字幕折り返しをキャッシュ。
+- 顔: 最大20fps。ライブラリはLCD転送中にもBlockedになるため、Part J/Kの待機状態判定を
+  フレーム全体のミューテックスへ置換。初期化中に元の2KB描画タスクを走らせず8KBへ差し替える。
+- 音声: 共通の `SpeechSynth` でPSOLAによる音程・母音長の調整、句末の伸び、疑問文の上昇、
+  長音の母音継続。既存の辞書・パックと互換。全単語の正読・自然さや英語の母語話者発音は保証しない。
+- 内部RAM: 音声バッファ9KiBをPSRAMへ移動。静的RAM66,048B、Flash5,203,529B。
+- 検証: 波形テスト4サンプルレートPASS、読み284文の回帰なし、COM4書込み、MQTT監視中の
+  自由文再生を確認。音の聴覚評価とタッチUIの目視確認は未実施。
+
 ## 進捗ログ
 - 2026-06-27: β3.5.0 に復帰確認（HEAD == β3.5.0, working tree clean）。本ドキュメント作成。
 - 2026-06-27: ファームウェア A1–A5 実装・ビルド成功（RAM 18.1%, Flash 18.3%）。

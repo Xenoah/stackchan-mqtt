@@ -56,6 +56,7 @@ String lastCommentText;                  // 最後の実況（本体詳細画面
 bool printerScreenOpen = false;          // 本体のプリンタ詳細画面を表示中か
 uint32_t printerScreenDrawnAt = 0;
 uint32_t printerScreenRevision = 0;
+PrinterScreenRenderer printerScreenRenderer;
 constexpr uint32_t kCommentGapMs = 1500;                   // 実況と実況の間
 constexpr uint32_t kPhaseLedHoldMs = 5UL * 60UL * 1000UL;  // 完了/失敗の LED 表示時間
 
@@ -328,8 +329,8 @@ M5Canvas& startupCanvas() {
   const int16_t height = M5.Display.height();
   if (canvasWidth != width || canvasHeight != height) {
     canvas.deleteSprite();
-    canvas.setColorDepth(16);
-    // 150KB のフルスクリーン canvas は PSRAM に置き、TLS 用の内部 RAM を空けておく
+    canvas.setColorDepth(8);
+    // RGB332: 320x240 のUIを75KiBにする（16bit時の半分）。TLS用RAMは使わない。
     canvas.setPsram(true);
     canvas.createSprite(width, height);
     canvasWidth = width;
@@ -932,6 +933,8 @@ void serviceApp() {
     status.minFreeHeap = minFreeHeapEver;
     status.maxAllocHeap = ESP.getMaxAllocHeap();
     status.freePsram = ESP.getFreePsram();
+    status.uiFrames = printerScreenRenderer.frames();
+    status.uiPixels = printerScreenRenderer.pixels();
     status.cameraActive = cameraGazeActive;
     status.voiceClips = builtinVoice.isReady() ? builtinVoice.clipCount() : 0;
     status.voiceFreeText = builtinVoice.canReadAnything();
@@ -1121,9 +1124,8 @@ uint32_t captionDurationMs(const String& text) {
 
 void drawPrinterScreenNow() {
   auto& canvas = startupCanvas();
-  drawPrinterScreen(canvas, printerNow, lastCommentText,
-                    configPortal.config().commentaryVoice);
-  canvas.pushSprite(0, 0);
+  printerScreenRenderer.draw(canvas, printerNow, lastCommentText,
+                             configPortal.config().commentaryVoice);
   printerScreenDrawnAt = millis();
   printerScreenRevision = printerRevisionSeen;
 }
@@ -1132,7 +1134,7 @@ void openPrinterScreen() {
   if (printerScreenOpen) return;
   printerScreenOpen = true;
   avatarFace.pauseDrawing();
-  delay(20);
+  printerScreenRenderer.invalidate();
   drawPrinterScreenNow();
 }
 
@@ -1145,6 +1147,7 @@ void closePrinterScreen() {
 // 状態が変わったとき・1秒ごとに本体のプリンタ詳細画面を描き直す
 void refreshPrinterScreen() {
   if (!printerScreenOpen) return;
+  if (millis() - printerScreenDrawnAt < 200) return;  // 受信集中時も最大5fps
   if (printerRevisionSeen != printerScreenRevision ||
       millis() - printerScreenDrawnAt >= 1000) {
     drawPrinterScreenNow();
@@ -1493,9 +1496,9 @@ ModeMenuButton modeMenuButtonAt(int16_t x, int16_t y) {
 void drawModeMenu(ModeMenuButton pressed) {
   auto& display = startupCanvas();
   const int16_t width = display.width();
-  const uint16_t bg = display.color565(14, 16, 20);
-  const uint16_t card = display.color565(30, 34, 43);
-  const uint16_t sub = display.color565(139, 146, 163);
+  const uint16_t bg = setupui::kBg;
+  const uint16_t card = setupui::kCard;
+  const uint16_t sub = setupui::kSub;
 
   display.fillScreen(bg);
   display.setTextSize(1);
@@ -1604,9 +1607,9 @@ void drawSettingsInfo() {
   auto& display = startupCanvas();
   const int16_t width = display.width();
   const int16_t height = display.height();
-  const uint16_t bg = display.color565(14, 16, 20);
-  const uint16_t card = display.color565(30, 34, 43);
-  const uint16_t sub = display.color565(139, 146, 163);
+  const uint16_t bg = setupui::kBg;
+  const uint16_t card = setupui::kCard;
+  const uint16_t sub = setupui::kSub;
   const uint16_t green = display.color565(74, 222, 128);
   const uint16_t cyan = display.color565(96, 165, 250);
 
@@ -1759,6 +1762,7 @@ void switchMenuToPrinterScreen() {
   modeMenuOpen = false;
   modeMenuPressed = ModeMenuButton::None;
   printerScreenOpen = true;
+  printerScreenRenderer.invalidate();
   drawPrinterScreenNow();
 }
 

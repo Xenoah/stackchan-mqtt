@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "VoiceVoxClient.h"  // LipSyncCallback / ServiceCallback
+#include "talk/SpeechSynth.h"
 
 // 内蔵ボイス（TTS サーバーなしで喋るためのオフライン音声）。
 //
@@ -51,6 +52,8 @@ class BuiltinVoice {
     int16_t clip;      // -1 = 無音
     uint16_t pauseMs;
     bool join;         // 直前のクリップと重ねてつなぐ（モーラどうし）
+    bool mora = false;
+    talk::MoraProsody prosody;
   };
 
   const char* key(const Clip& clip) const { return index_ + clip.keyOffset; }
@@ -68,6 +71,8 @@ class BuiltinVoice {
   void addPause(std::vector<Step>& steps, uint16_t ms) const;
 
   bool playClip(const Clip& clip, bool join, bool holdTail);
+  bool playMora(const Step& step, bool holdTail, talk::MoraRenderer& renderer);
+  bool decodeSamples(int16_t* out, size_t count, int& predictor, int& stepIndex);
   void playSilence(uint16_t ms);
   void write(const int16_t* samples, size_t count);
   void flushTail();
@@ -87,6 +92,7 @@ class BuiltinVoice {
   size_t bufferIndex_ = 0;
   size_t bufferFill_ = 0;      // 書き込み中のバッファに入っているサンプル数
   size_t tailLen_ = 0;         // 次のモーラと重ねるために取っておいた末尾
+  uint32_t maxMoraUs_ = 0;
   LipSyncCallback lipSync_ = nullptr;
   ServiceCallback service_ = nullptr;
   String lastError_;
