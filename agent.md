@@ -647,3 +647,6 @@ python -m esptool --chip esp32s3 --port COM4 --baud 921600 read-flash 0xFF0000 0
   ホストでの描画確認と実機での音声処理成功を、実機画面の目視確認とは区別する。
 - `.release/v2.5.1/` に通常の7成果物を作成。firmware.binは5,207,152B、SHA256は
   `c48f48da31990d1245bcd0945a154a49592ac9ad7b18d84f6bd301080d10968c`。
+- v2.5.1タグの対象は `f5f1b3f`。タグから字幕付きの顔2枚、本体UI3枚、Web2枚を生成した。
+  `docs/screenshots/v2.5.1/` の7PNGを読み取り、全ソース/画像SHA256とタグの一致を確認。
+  字幕の顔2枚をREADME冒頭とリリース説明の先頭画像に追加する。

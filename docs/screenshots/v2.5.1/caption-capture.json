@@ -1,0 +1,67 @@
+{
+  "version": "v2.5.1",
+  "commit": "f5f1b3f7583424c6844df5124b622f5c74dd4d7a",
+  "capture": "Reproduction with actual FaceHud, M5GFX fonts and m5stack-avatar face parts; no hardware capture",
+  "source_sha256": {
+    "src/FaceHud.h": "e92ec8be6b960884f246e9982a46b710a5f3ab947dd2a5a51315278896189077",
+    "src/FaceHud.cpp": "218d14554b3ca1b6fc0398fa20c8bda2a716dde978b188c1786081df533dc558",
+    "src/main.cpp": "bfd090667d3a35a0cbb1392bfafa85c1ba3a1634033814ddb8d659e97de4fc4e"
+  },
+  "avatar_source_sha256": {
+    "Accessory.h": "5746b400d79526553978f4aa4c28459ea7f5884ece96f3e2ccf8485441abb57e",
+    "Avatar.h": "731b2196cc694673b5e050aeabcaccc4bdb2395c215b69fb2b6ac4448335384a",
+    "Balloon.h": "1a1e7d665984a6c0dc8a3c43a32373c1991d6651eacdbe78bdbdf91dd60840e1",
+    "BatteryIcon.h": "8ce589145e93632140185551259d3efba79deccc5b8cd64f484401e0e1e518d8",
+    "BoundingRect.h": "8878e00dcc4983aecc74362189577c48e000fea1a379a8e4010a0d0180185610",
+    "ColorPalette.h": "7495458c9b01d7c31210ef91266b664f2e69513534f80628ddc2beee36fa30cd",
+    "Drawable.h": "f4bef2a4c4f50f82961736f471337c2243bf29a36a24fa45bafaa5445f4862c9",
+    "DrawContext.h": "23444a812485c64ef0855817a870e11c70d4a829e7fde56538d939edd7033328",
+    "Effect.h": "0f5aeaadf8dd0756f31cee4a9d2a01e1b3dbaab04d621f7a010ae0a9ade93d3e",
+    "Expression.h": "251dddd6211b0d4b90a3cf55fcc2d3106453753d468a7a257845d2dc9052b57d",
+    "Eye.h": "a9543510c639395cf16360084c0d56c14af93ce6ce4dae78d83923000dfa745d",
+    "Eyeblow.h": "de0b0bc20cad018b8739826d56db97555fad1caf240f47e696d69042fa7e5611",
+    "Face.h": "a913059119b727d1746ad0653e972687c53a542dd846ed751206106c04b24be1",
+    "Gaze.h": "5801f20fcad6477244ee1efc54db6bba0f35beb626b05a27d3421274167760a8",
+    "Mouth.h": "34dfefbc5bcb44f813f8af02361b85707940088b0cb20205f75646b830276653",
+    "Avatar.cpp": "887f770916ef647f79b13ae37da48cb7745ee140ccdbb33537216e2ea6eea378",
+    "BoundingRect.cpp": "1f99ca4da91fa39c68e83340ae49a31383bf5ad942f329b9bb1163adfac58f27",
+    "ColorPalette.cpp": "65d7fd0d9c0aa8ea710e6281904eed7d00ed5728bbc9ded235789f9d45925a37",
+    "DrawContext.cpp": "975ba9616e239201abf7a0585c203f9efcd2ed13658ba1aef646f57729764daf",
+    "DrawingUtils.cpp": "fe53eb53b1e18dd6f15b3560683ca3322e8a113c2f87cac345359366c2172d07",
+    "Eye.cpp": "d62c43e49505b4c1638d3ec8584ec8a7061b2e2134d7793b78b1c746ef868ffb",
+    "Eyeblow.cpp": "bfe29316656b33254074ab6cb68146236c0ea4bb0b2d9d5cca32198921099021",
+    "Eyebrows.cpp": "0a6289af87ae7625b9bbb19c808f4e100fb2503ed2a4e31e7136767b69aa12f1",
+    "Eyes.cpp": "87bc11aebbca1f7e9d05d03dfdbd6eb8a9cd8c3d7101fced01739a1f5427108e",
+    "Face.cpp": "a57c0d73a138e0817e29e48065a44993db562806657dbb83fd936494edc23f13",
+    "Gaze.cpp": "d537c0dcd3be13822965556e5a382bd36d19f1122b62a7c228631e8f6065980a",
+    "Mouth.cpp": "43d59ee7f66795160982266fb256dee444d9fe59818ad42e06b32da1efa4cb28",
+    "Mouths.cpp": "4d972a291fc41b3d4039d83e6e49650100a327dcbedf6d8be5da01d351f0ac67"
+  },
+  "renderer": {
+    "M5GFX": "0.2.30",
+    "m5stack-avatar": "0.10.0",
+    "font": "lgfxJapanGothicP_16",
+    "color_depth": 1
+  },
+  "sample": {
+    "expression": "Happy",
+    "breath": 0,
+    "mouth_open_ratio": 0.35,
+    "percent": 62,
+    "remaining": "0:42"
+  },
+  "images": [
+    {
+      "file": "device-pet-local.png",
+      "width": 320,
+      "height": 240,
+      "sha256": "64358df41c682abe8c4f52b8c900a026db8768e6c9aabef9697ba4d2adb976f6"
+    },
+    {
+      "file": "device-pet-mqtt.png",
+      "width": 320,
+      "height": 240,
+      "sha256": "a1d541df8a645dc14011a1fcfe8a43a22f64f480767456f6f6e7539d5903390d"
+    }
+  ]
+}
